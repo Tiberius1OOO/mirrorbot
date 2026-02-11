@@ -1,209 +1,244 @@
-DragonCopy Mirror Bot
+# DragonCopy Mirror Bot
 
 A lightweight Discord bot for copying and relaying messages between channels.
-Originally built for long-term story development servers where content needs to be mirrored, delayed, or archived without manual reposting.
+Designed for long-term story servers, archive channels, and delayed relays.
 
-The bot focuses on reliability, simple setup, and per-server configuration.
+---
 
-Features
+## Features
 
-Channel copy
+### Channel copy
 
-Copy an entire channel into another one
+* Copy an entire channel into another one
+* Preserves usernames and avatars using webhooks
+* Automatically splits messages longer than Discord’s 2000-character limit
+* Supports attachments
 
-Preserves usernames and avatars using webhooks
+### Single message copy
 
-Automatically splits messages longer than Discord’s 2000-character limit
+* Right-click any message
+* Select **Copy message**
+* Choose the target channel
 
-Works with attachments
+### Live relays
 
-Single message copy
+* Mirror messages from one channel to another
+* Optional delay (for spoiler buffers or moderation)
+* Multiple relays per server
 
-Right-click any message
+### Per-server configuration
 
-Select Copy message
+* Each server gets its own config file
+* No overlap between communities
 
-Choose the target channel
+### Error logging
 
-Live relays
+* Dedicated error channel per server
+* Admin-only control
 
-Mirror messages from one channel to another
+### Basic stats
 
-Optional delay (for spoiler buffers, moderation, etc.)
+* Tracks how many messages were copied
 
-Multiple relays per server
+---
 
-Per-server configuration
+## Commands
 
-Each server gets its own config file
+All commands are **administrator-only**.
 
-No overlap between different communities
+### Setup
 
-Error logging
-
-Dedicated error channel per server
-
-Admin-only control
-
-Basic stats
-
-Tracks how many messages were copied
-
-Commands
-
-All commands are administrator-only.
-
-Setup
+```
 /setup
+```
 
+Initial setup. Select the channel where the bot should send error messages.
 
-Initial setup.
-Select the channel where the bot should send error messages.
+---
 
-Copy a full channel
+### Copy a full channel
+
+```
 /copy_channel
+```
 
+Opens a UI:
 
-Opens a channel selector UI:
+1. Choose source channel
+2. Choose target channel
+3. Start copying
 
-Choose source channel
+---
 
-Choose target channel
+### Start a live relay
 
-Start copying
-
-Start a live relay
-/start_relay source:<channel> target:<channel> delay_seconds:<number>
-
-
-Creates a live relay from one channel to another.
+```
+/start_relay source: target: delay_seconds:
+```
 
 Example:
 
+```
 /start_relay source:#rp target:#archive delay_seconds:3600
+```
 
-Stop a relay
-/stop_relay source:<channel>
+---
 
+### Stop a relay
 
-Stops the relay for the selected source channel.
+```
+/stop_relay source:
+```
 
-Show active relays
+---
+
+### Show active relays
+
+```
 /instances
+```
 
+---
 
-Displays all configured relays for the server.
+### Bot diagnostics
 
-Bot diagnostics
+```
 /bot_info
+```
 
+---
 
-Sends a diagnostic report to the configured error channel.
+### Test error channel
 
-Test error channel
+```
 /test_error
+```
 
+---
 
-Sends a test message to confirm the error system works.
-
-Message context command
+## Message context command
 
 Right-click a message:
 
+```
 Apps → Copy message
-
+```
 
 Select the destination channel and the bot will mirror it.
 
-Installation
-Requirements
+---
 
-Python 3.10+
+## Installation
 
-A Discord bot token
+### Requirements
 
-discord.py installed
+* Python 3.10+
+* Discord bot token
+* `discord.py`
 
-1. Clone the repository
+---
+
+### Clone repository
+
+```bash
 git clone https://github.com/Tiberius1OOO/mirrorbot.git
 cd mirrorbot
+```
 
-2. Create virtual environment
+---
+
+### Create virtual environment
+
+**Linux/macOS**
+
+```bash
 python3 -m venv venv
 source venv/bin/activate
+```
 
+**Windows**
 
-On Windows:
-
+```bash
+python -m venv venv
 venv\Scripts\activate
+```
 
-3. Install dependencies
+---
+
+### Install dependencies
+
+```bash
 pip install discord.py
+```
 
-4. Set the bot token
+---
 
-Linux/macOS:
+### Set the bot token
 
+**Linux/macOS**
+
+```bash
 export DISCORD_TOKEN="your_token_here"
+```
 
+**Windows**
 
-Windows:
+```powershell
+$env:DISCORD_TOKEN="your_token_here"
+```
 
-set DISCORD_TOKEN=your_token_here
+---
 
-5. Run the bot
+### Run the bot
+
+```bash
 python bot.py
+```
 
-Raspberry Pi (quick setup)
+---
 
-Inside the bot folder:
-
-python3 -m venv venv
-source venv/bin/activate
-pip install discord.py
-python bot.py
-
-
-Then create a systemd service for auto-start.
-
-Configuration
+## Configuration
 
 Each server gets its own config file:
 
+```
 configs/<guild_id>.json
-
+```
 
 Example structure:
 
+```json
 {
-    "error_channel": 1234567890,
-    "relays": [],
-    "stats": {
-        "messages_copied": 0
-    }
+  "error_channel": 1234567890,
+  "relays": [],
+  "stats": {
+    "messages_copied": 0
+  }
 }
+```
 
-Permissions required
+---
+
+## Required Permissions
 
 The bot needs:
 
-Send Messages
+* Send Messages
+* Manage Webhooks
+* Read Message History
+* Attach Files
 
-Manage Webhooks
+---
 
-Read Message History
+## Known Limitations
 
-Attach Files
+* Pending relay messages are lost if the bot restarts during the delay
+* Very large channel copies may take hours due to rate limits
+* Uses file-based config instead of a database by design
 
-Known limitations
+---
 
-Pending relay messages are lost if the bot restarts during the delay.
+## Purpose
 
-Extremely large channel copies may take hours due to Discord rate limits.
-
-No database is used; everything is file-based by design.
-
-Purpose
-
-This bot was built for a collaborative sci-fi writing community to manage mirrored RP channels, spoiler buffers, and archival copies.
-It is intentionally simple, transparent, and easy to host on low-power hardware like a Raspberry Pi.
+Originally built for collaborative sci-fi writing servers to manage mirrored RP channels, spoiler buffers, and archive copies.
+Designed to be simple, transparent, and easy to host on low-power hardware like a Raspberry Pi.

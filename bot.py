@@ -650,54 +650,54 @@ async def on_message(message: discord.Message):
     - Supports delayed forwarding
     - Uses webhooks to preserve author identity
     """
-    print(f"[DEBUG] Message from {message.author} in {message.channel.id}")
+    # print(f"[DEBUG] Message from {message.author} in {message.channel.id}")
 
     if message.author.bot:
-        print("[DEBUG] Ignored: message from bot")
+        # print("[DEBUG] Ignored: message from bot")
         return
 
     guild = message.guild
     if not guild:
-        print("[DEBUG] Ignored: no guild")
+        # print("[DEBUG] Ignored: no guild")
         return
 
     config = load_and_prepare_config(guild.id)
     if not config:
-        print("[DEBUG] No config found")
+        # print("[DEBUG] No config found")
         return
 
     relays = config.get("relays", [])
-    print(f"[DEBUG] Active relays: {relays}")
+    # print(f"[DEBUG] Active relays: {relays}")
 
     for relay in relays:
-        print(f"[DEBUG] Checking relay: {relay}")
+        # print(f"[DEBUG] Checking relay: {relay}")
 
         if message.channel.id != relay["source"]:
-            print("[DEBUG] Channel does not match relay source")
+            # print("[DEBUG] Channel does not match relay source")
             continue
 
         target_channel = guild.get_channel(relay["target"])
         if not target_channel:
-            print("[DEBUG] Target channel not found")
+            # print("[DEBUG] Target channel not found")
             continue
 
         delay = relay["delay"]
-        print(f"[DEBUG] Relay match! Sending after {delay}s")
+        # print(f"[DEBUG] Relay match! Sending after {delay}s")
 
         async def delayed_send(msg, target, delay_seconds):
             await asyncio.sleep(delay_seconds)
-            print("[DEBUG] Delayed send triggered")
+            # print("[DEBUG] Delayed send triggered")
 
             try:
                 webhook = await get_or_create_webhook(target)
-                print("[DEBUG] Webhook obtained")
+                # print("[DEBUG] Webhook obtained")
 
                 username = msg.author.display_name
                 avatar = msg.author.display_avatar.url
                 content = msg.content or ""
 
                 if not content and not msg.attachments:
-                    print("[DEBUG] Empty message, skipping")
+                    # print("[DEBUG] Empty message, skipping")
                     return
 
                 await webhook.send(
@@ -706,7 +706,7 @@ async def on_message(message: discord.Message):
                     avatar_url=avatar,
                 )
 
-                print("[DEBUG] Message relayed successfully")
+                # print("[DEBUG] Message relayed successfully")
                 # --- Counter update ---
                 lock = get_guild_lock(guild.id)
                 async with lock:
@@ -717,7 +717,7 @@ async def on_message(message: discord.Message):
                         save_config(guild.id, config)
 
             except Exception as e:
-                print(f"[DEBUG] Relay error: {e}")
+                # print(f"[DEBUG] Relay error: {e}")
                 await send_error(guild, str(e))
 
         asyncio.create_task(delayed_send(message, target_channel, delay))

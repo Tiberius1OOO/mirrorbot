@@ -4,17 +4,23 @@ import json
 import os
 import asyncio
 
-#DC token set inside system since I use it on my raspi might need to change that here for your specific case, but I recommend just setting it as an environment variable for security reasons. You can do this in your terminal with:
-#OBVIOUSLY on the rapsipi
+# DC token set inside system since I use it on my raspi might need to change that here for your specific case, but I recommend just setting it as an environment variable for security reasons. You can do this in your terminal with:
+# OBVIOUSLY on the rapsipi
 # export DISCORD_TOKEN="your_token_here"
-#or inside Environment=DISCORD_TOKEN=your_token_here in the systemd service file if you use that method to run the bot
+# or inside Environment=DISCORD_TOKEN=your_token_here in the systemd service file if you use that method to run the bot
 TOKEN = os.getenv("DISCORD_TOKEN")
+if not TOKEN:
+    raise RuntimeError("DISCORD_TOKEN environment variable not set.")
 
 
 CONFIG_FOLDER = "configs"
 
+config_locks = {}
+webhook_cache = {}
+
 intents = discord.Intents.default()
 intents.members = True
+intents.message_content = True
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
@@ -32,7 +38,22 @@ def save_config(guild_id: int, data: dict):
         json.dump(data, f, indent=4)
 
 
+# ==================================================
+# Configuration handling
+# ==================================================
+
+
 def load_and_prepare_config(guild_id: int):
+    """
+    Loads the guild configuration from disk and ensures
+    required keys exist.
+
+    Args:
+        guild_id (int): Discord guild ID
+
+    Returns:
+        dict | None: Prepared config or None if not found
+    """
     path = get_config_path(guild_id)
 
     if not os.path.exists(path):
@@ -111,12 +132,24 @@ async def send_error(guild: discord.Guild, message: str):
         print(f"[ERROR] Failed to send error to channel: {e}")
 
 
+# ==================================================
+# Webhook utilities
+# ==================================================
+
+
 async def get_or_create_webhook(channel: discord.TextChannel):
+    if channel.id in webhook_cache:
+        return webhook_cache[channel.id]
+
     webhooks = await channel.webhooks()
     for hook in webhooks:
         if hook.name == "DragonCopy":
+            webhook_cache[channel.id] = hook
             return hook
-    return await channel.create_webhook(name="DragonCopy")
+
+    hook = await channel.create_webhook(name="DragonCopy")
+    webhook_cache[channel.id] = hook
+    return hook
 
 
 # ---------- Setup UI ----------
@@ -154,7 +187,9 @@ class SetupView(discord.ui.View):
         self.add_item(ErrorChannelSelect(guild_id))
 
 
-# ---------- Commands ----------
+# ==================================================
+# Slash commands
+# ==================================================
 
 
 @tree.command(name="stop_relay", description="Stop a relay by source channel")
@@ -196,7 +231,14 @@ async def start_relay(
         return
 
     relay = {"source": source.id, "target": target.id, "delay": delay_seconds}
-
+    # prevent duplicates
+    for r in config["relays"]:
+        if r["source"] == source.id:
+            await interaction.response.send_message(
+                f"A relay from {source.mention} already exists. Please stop it first.",
+                ephemeral=True,
+            )
+            return
     config["relays"].append(relay)
     save_config(guild_id, config)
 
@@ -461,6 +503,11 @@ async def copy_message_context(
 
 
 class ChannelCopyView(discord.ui.View):
+    """
+    UI View that allows selecting a source and target channel
+    and starting a full channel copy.
+    """
+
     def __init__(self, guild: discord.Guild):
         super().__init__(timeout=120)
         self.guild = guild
@@ -572,89 +619,114 @@ class StartCopyButton(discord.ui.Button):
 
                     copied_count += 1
                     await asyncio.sleep(1.0)
-            config["stats"]["messages_copied"] += copied_count
-            save_config(guild.id, config)
+            lock = get_guild_lock(guild.id)
+            async with lock:
+                config = load_and_prepare_config(guild.id)
+                if not config:
+                    return
+
+                stats = config.setdefault("stats", {})
+                stats["messages_copied"] = (
+                    stats.get("messages_copied", 0) + copied_count
+                )
+                save_config(guild.id, config)
 
         except Exception as e:
             await send_error(guild, str(e))
 
 
-# ---------- Events ----------
+# ==================================================
+# Event handlers
+# ==================================================
 
 
 @client.event
 async def on_message(message: discord.Message):
+    """
+    Handles incoming messages and forwards them via relay
+    if a matching relay configuration exists.
+
+    - Ignores bot messages
+    - Supports delayed forwarding
+    - Uses webhooks to preserve author identity
+    """
+    print(f"[DEBUG] Message from {message.author} in {message.channel.id}")
+
     if message.author.bot:
+        print("[DEBUG] Ignored: message from bot")
         return
 
     guild = message.guild
     if not guild:
+        print("[DEBUG] Ignored: no guild")
         return
 
     config = load_and_prepare_config(guild.id)
     if not config:
+        print("[DEBUG] No config found")
         return
 
     relays = config.get("relays", [])
+    print(f"[DEBUG] Active relays: {relays}")
 
     for relay in relays:
+        print(f"[DEBUG] Checking relay: {relay}")
+
         if message.channel.id != relay["source"]:
+            print("[DEBUG] Channel does not match relay source")
             continue
 
         target_channel = guild.get_channel(relay["target"])
         if not target_channel:
+            print("[DEBUG] Target channel not found")
             continue
 
         delay = relay["delay"]
+        print(f"[DEBUG] Relay match! Sending after {delay}s")
 
         async def delayed_send(msg, target, delay_seconds):
             await asyncio.sleep(delay_seconds)
+            print("[DEBUG] Delayed send triggered")
 
             try:
                 webhook = await get_or_create_webhook(target)
-                config = load_and_prepare_config(guild.id)
-                copied_count = 0
+                print("[DEBUG] Webhook obtained")
 
-                if isinstance(msg.author, discord.Member):
-                    username = msg.author.display_name
-                else:
-                    username = msg.author.name
-
+                username = msg.author.display_name
                 avatar = msg.author.display_avatar.url
                 content = msg.content or ""
 
-                files = []
-                for attachment in msg.attachments:
-                    file = await attachment.to_file()
-                    files.append(file)
-
-                if not content and not files:
+                if not content and not msg.attachments:
+                    print("[DEBUG] Empty message, skipping")
                     return
 
-                parts = split_message(content) if content else [""]
+                await webhook.send(
+                    content=content,
+                    username=username,
+                    avatar_url=avatar,
+                )
 
-                for i, part in enumerate(parts):
-                    if i == 0 and files:
-                        await webhook.send(
-                            content=part,
-                            username=username,
-                            avatar_url=avatar,
-                            files=files,
-                        )
-                    else:
-                        await webhook.send(
-                            content=part, username=username, avatar_url=avatar
-                        )
-
-                    copied_count += 1
-                    await asyncio.sleep(1.0)
-                config["stats"]["messages_copied"] += copied_count
-                save_config(guild.id, config)
+                print("[DEBUG] Message relayed successfully")
+                # --- Counter update ---
+                lock = get_guild_lock(guild.id)
+                async with lock:
+                    config = load_and_prepare_config(guild.id)
+                    if config:
+                        stats = config.setdefault("stats", {})
+                        stats["messages_copied"] = stats.get("messages_copied", 0) + 1
+                        save_config(guild.id, config)
 
             except Exception as e:
+                print(f"[DEBUG] Relay error: {e}")
                 await send_error(guild, str(e))
 
         asyncio.create_task(delayed_send(message, target_channel, delay))
+
+
+def get_guild_lock(guild_id: int):
+    if guild_id not in config_locks:
+        config_locks[guild_id] = asyncio.Lock()
+    return config_locks[guild_id]
 
 
 @copy_message_context.error

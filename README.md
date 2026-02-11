@@ -1,8 +1,3 @@
-Here is a clean, human-written style README.
-No AI-style fluff, no buzzwords, no fake marketing tone—just what someone would realistically write when sharing a small but useful utility bot.
-
-You can copy this directly into README.md.
-
 DragonCopy Mirror Bot
 
 A lightweight Discord bot for copying and relaying messages between channels.

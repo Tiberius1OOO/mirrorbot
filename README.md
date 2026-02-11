@@ -125,7 +125,7 @@ A Discord bot token
 discord.py installed
 
 1. Clone the repository
-git clone https://github.com/yourname/mirrorbot.git
+git clone https://github.com/Tiberius1OOO/mirrorbot.git
 cd mirrorbot
 
 2. Create virtual environment

@@ -4,7 +4,12 @@ import json
 import os
 import asyncio
 
-TOKEN = "*API Token here"
+#DC token set inside system since I use it on my raspi might need to change that here for your specific case, but I recommend just setting it as an environment variable for security reasons. You can do this in your terminal with:
+#OBVIOUSLY on the rapsipi
+# export DISCORD_TOKEN="your_token_here"
+#or inside Environment=DISCORD_TOKEN=your_token_here in the systemd service file if you use that method to run the bot
+TOKEN = os.getenv("DISCORD_TOKEN")
+
 
 CONFIG_FOLDER = "configs"
 

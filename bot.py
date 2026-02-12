@@ -442,26 +442,39 @@ class CopyChannelSelect(discord.ui.ChannelSelect):
 
             username = self.source_message.author.display_name
             avatar = self.source_message.author.display_avatar.url
-            content = self.source_message.content
+            content = self.source_message.content or ""
 
             files = []
             attachments = self.source_message.attachments or []
             for attachment in attachments:
                 file = await attachment.to_file()
                 files.append(file)
-            if files:
-                await webhook.send(
-                    content=content, username=username, avatar_url=avatar, files=files
-                )
-            else:
-                await webhook.send(
-                    content=content, username=username, avatar_url=avatar
-                )
+
+            if not content and not files:
+                return
+
+            parts = split_message(content) if content else [""]
+
+            for i, part in enumerate(parts):
+                if i == 0 and files:
+                    await webhook.send(
+                        content=part,
+                        username=username,
+                        avatar_url=avatar,
+                        files=files,
+                    )
+                else:
+                    await webhook.send(
+                        content=part,
+                        username=username,
+                        avatar_url=avatar,
+                    )
+
+                await asyncio.sleep(1.0)
 
             await interaction.response.send_message(
                 f"Message copied to {target_channel.mention}", ephemeral=True
             )
-
         except Exception as e:
             await send_error(guild, str(e))
             await interaction.response.send_message(
@@ -695,13 +708,17 @@ async def on_message(message: discord.Message):
                 username = msg.author.display_name
                 avatar = msg.author.display_avatar.url
                 content = msg.content or ""
+
                 files = []
                 for attachment in msg.attachments:
                     file = await attachment.to_file()
                     files.append(file)
+
                 if not content and not files:
                     return
+
                 parts = split_message(content) if content else [""]
+
                 for i, part in enumerate(parts):
                     if i == 0 and files:
                         await webhook.send(
@@ -716,7 +733,9 @@ async def on_message(message: discord.Message):
                             username=username,
                             avatar_url=avatar,
                         )
+
                     await asyncio.sleep(1.0)
+
                 # print("[DEBUG] Message relayed successfully")
                 # --- Counter update ---
                 lock = get_guild_lock(guild.id)

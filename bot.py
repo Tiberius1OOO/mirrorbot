@@ -695,17 +695,28 @@ async def on_message(message: discord.Message):
                 username = msg.author.display_name
                 avatar = msg.author.display_avatar.url
                 content = msg.content or ""
-
-                if not content and not msg.attachments:
-                    # print("[DEBUG] Empty message, skipping")
+                files = []
+                for attachment in msg.attachments:
+                    file = await attachment.to_file()
+                    files.append(file)
+                if not content and not files:
                     return
-
-                await webhook.send(
-                    content=content,
-                    username=username,
-                    avatar_url=avatar,
-                )
-
+                parts = split_message(content) if content else [""]
+                for i, part in enumerate(parts):
+                    if i == 0 and files:
+                        await webhook.send(
+                            content=part,
+                            username=username,
+                            avatar_url=avatar,
+                            files=files,
+                        )
+                    else:
+                        await webhook.send(
+                            content=part,
+                            username=username,
+                            avatar_url=avatar,
+                        )
+                    await asyncio.sleep(1.0)
                 # print("[DEBUG] Message relayed successfully")
                 # --- Counter update ---
                 lock = get_guild_lock(guild.id)

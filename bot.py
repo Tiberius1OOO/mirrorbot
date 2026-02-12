@@ -1,8 +1,9 @@
-import discord
-from discord import app_commands
+import asyncio
 import json
 import os
-import asyncio
+
+import discord
+from discord import app_commands
 
 # DC token set inside system since I use it on my raspi might need to change that here for your specific case, but I recommend just setting it as an environment variable for security reasons. You can do this in your terminal with:
 # OBVIOUSLY on the rapsipi

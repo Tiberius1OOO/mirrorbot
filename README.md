@@ -242,3 +242,13 @@ The bot needs:
 
 Originally built for collaborative sci-fi writing servers to manage mirrored RP channels, spoiler buffers, and archive copies.
 Designed to be simple, transparent, and easy to host on low-power hardware like a Raspberry Pi.
+
+## License
+
+This project is licensed under the  
+**Creative Commons Attribution–NonCommercial 4.0 (CC BY-NC 4.0)** license.
+
+You are free to use and modify this bot for non-commercial purposes,  
+but you must give proper credit to the original author.
+
+Commercial use requires explicit permission.

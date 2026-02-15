@@ -1,3 +1,75 @@
+"""
+DragonCopy Mirror Bot
+=====================
+
+Main entry point for the Discord Mirror Bot.
+
+This module initializes the Discord client, loads command modules,
+and handles live message relays between channels.
+
+Overview
+--------
+The bot provides tools for:
+
+• Copying messages between channels
+• Relaying messages live with optional delay
+• Preserving usernames and avatars using webhooks
+• Per-server configuration stored as JSON
+• Administrator-only control commands
+
+Architecture
+------------
+The bot is split into logical modules:
+
+helpers/
+    config.py     → configuration loading and saving
+    text.py       → message splitting utilities
+    webhooks.py   → webhook creation and caching
+
+commands/
+    slash.py      → slash commands (/setup, /start_relay, etc.)
+    context.py    → right-click message commands
+
+bot.py
+    Main runtime:
+    • Initializes Discord client
+    • Registers command modules
+    • Handles live relay logic
+    • Starts the bot
+
+Environment Variables
+---------------------
+DISCORD_TOKEN
+    Required. The Discord bot token used for authentication.
+
+Example (Linux/macOS):
+    export DISCORD_TOKEN="your_token_here"
+
+Example (systemd service):
+    Environment=DISCORD_TOKEN=your_token_here
+
+Relay Behavior
+--------------
+When a message is sent in a configured source channel:
+
+1. Bot checks active relay configurations
+2. If a match is found:
+   • Waits for the configured delay
+   • Splits long messages into ≤2000 characters
+   • Reposts using a webhook
+   • Preserves username and avatar
+
+Limitations
+-----------
+• Pending delayed messages are lost if the bot restarts
+• Large channel copies are slow due to Discord rate limits
+• No database is used; all data is stored in JSON files
+
+Author
+------
+DragonCopy project – designed for collaborative writing and RP servers.
+"""
+
 import asyncio
 import os
 
@@ -36,6 +108,20 @@ context.register(tree, client)
 
 @client.event
 async def on_message(message: discord.Message):
+    """
+    Handles incoming messages and forwards them via relay
+    if a matching relay configuration exists.
+
+    Behavior:
+    • Ignores bot messages
+    • Ignores messages outside guilds
+    • Checks configured relays for the guild
+    • If a relay matches:
+        - waits for the configured delay
+        - splits long messages
+        - sends via webhook
+        - preserves username and avatar
+    """
     if message.author.bot:
         return
 

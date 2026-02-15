@@ -1,3 +1,44 @@
+"""
+Slash Command Registration
+==========================
+
+Registers all administrator slash commands for the bot.
+
+Primary responsibilities:
+• Setup and configuration commands
+• Relay management commands
+• Diagnostic commands
+
+Architecture
+------------
+All slash commands are defined inside a single `register`
+function. This function is called during bot startup and
+attaches commands to the global command tree.
+
+This design allows:
+• Clean separation from the main bot file
+• Modular command loading
+• Easier future expansion (e.g., multiple command modules)
+
+Command Categories
+------------------
+Setup:
+    /setup
+        Initializes the configuration for the server.
+
+Relay Control:
+    /start_relay
+        Creates a live relay between channels.
+    /stop_relay
+        Stops an existing relay.
+    /instances
+        Displays all active relays.
+
+Diagnostics:
+    /bot_info
+        Sends a detailed bot status report.
+"""
+
 import discord
 from discord import app_commands
 
@@ -5,10 +46,31 @@ from helpers.config import load_and_prepare_config, save_config
 
 
 def register(tree, client):
+    """
+    Registers all slash commands with the command tree.
+
+    This function is called during bot startup and
+    attaches commands to the global command system.
+
+    Args:
+        tree (app_commands.CommandTree):
+            The bot's command tree.
+
+        client (discord.Client):
+            The main Discord client instance.
+    """
 
     @tree.command(name="setup", description="Initial bot setup")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_command(interaction: discord.Interaction):
+        """
+        Initializes the bot configuration for the server.
+
+        Sets the current channel as the error channel and
+        creates the default configuration structure.
+
+        Admin only.
+        """
         guild_id = interaction.guild.id
 
         config = {
@@ -32,6 +94,20 @@ def register(tree, client):
         target: discord.TextChannel,
         delay_seconds: int,
     ):
+        """
+        Creates a new relay from a source channel
+        to a target channel.
+
+        Args:
+            source:
+                Channel to copy messages from.
+            target:
+                Channel to send relayed messages to.
+            delay_seconds:
+                Delay before messages are forwarded.
+
+        Admin only.
+        """
         guild_id = interaction.guild.id
         config = load_and_prepare_config(guild_id)
 
@@ -59,6 +135,18 @@ def register(tree, client):
     @tree.command(name="stop_relay", description="Stop a relay")
     @app_commands.checks.has_permissions(administrator=True)
     async def stop_relay(interaction: discord.Interaction, source: discord.TextChannel):
+        """
+        Stops an existing relay from a source channel.
+
+        Removes the relay configuration for the
+        specified source channel.
+
+        Args:
+            source:
+                The source channel of the relay to stop.
+
+        Admin only.
+        """
         guild_id = interaction.guild.id
         config = load_and_prepare_config(guild_id)
 
@@ -73,6 +161,14 @@ def register(tree, client):
     @tree.command(name="instances", description="Show relays")
     @app_commands.checks.has_permissions(administrator=True)
     async def instances(interaction: discord.Interaction):
+        """
+        Displays all active relay configurations
+        for the current server.
+
+        Shows source and target channel pairs.
+
+        Admin only.
+        """
         config = load_and_prepare_config(interaction.guild.id)
 
         if not config or not config["relays"]:
@@ -93,6 +189,21 @@ def register(tree, client):
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def bot_info(interaction: discord.Interaction):
+        """
+        Sends a diagnostic report to the configured
+        error channel.
+
+        The report includes:
+        • Active relay configurations
+        • Server ID
+        • Command issuer
+        • Message copy statistics
+
+        Useful for debugging and monitoring
+        bot activity.
+
+        Admin only.
+        """
         guild = interaction.guild
         guild_id = guild.id
         user = interaction.user

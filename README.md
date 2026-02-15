@@ -178,13 +178,13 @@ pip install discord.py
 **Linux/macOS**
 
 ```bash
-export DISCORD_TOKEN="your_token_here"
+export DISCORD_TOKEN_MIRRORBOT="your_token_here"
 ```
 
 **Windows**
 
 ```powershell
-$env:DISCORD_TOKEN="your_token_here"
+$env:DISCORD_TOKEN_MIRRORBOT="your_token_here"
 ```
 
 ---

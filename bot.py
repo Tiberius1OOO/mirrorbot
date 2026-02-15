@@ -81,7 +81,7 @@ from helpers.config import load_and_prepare_config, save_config
 from helpers.text import split_message
 from helpers.webhooks import get_or_create_webhook
 
-TOKEN = os.getenv("DISCORD_TOKEN")
+TOKEN = os.getenv("DISCORD_TOKEN_MIRRORBOT")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN environment variable not set.")
 

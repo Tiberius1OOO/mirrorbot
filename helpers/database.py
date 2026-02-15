@@ -44,11 +44,11 @@ def init_db():
         """
         CREATE TABLE IF NOT EXISTS relays (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id INTEGER NOT NULL,
-            source_channel INTEGER NOT NULL,
-            target_channel INTEGER NOT NULL,
-            delay INTEGER NOT NULL,
-            FOREIGN KEY (guild_id) REFERENCES guilds(guild_id)
+            guild_id INTEGER,
+            source_channel INTEGER,
+            target_channel INTEGER,
+            delay INTEGER DEFAULT 0,
+            UNIQUE(guild_id, source_channel)
         )
         """
     )
@@ -61,6 +61,13 @@ def init_db():
             messages_copied INTEGER DEFAULT 0,
             FOREIGN KEY (guild_id) REFERENCES guilds(guild_id)
         )
+        """
+    )
+    c.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS
+        idx_relay_unique
+        ON relays (guild_id, source_channel)
         """
     )
 

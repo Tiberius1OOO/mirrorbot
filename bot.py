@@ -18,14 +18,14 @@ import discord
 from discord import app_commands
 
 from commands import context, slash
-from helpers.text import split_message
-from helpers.webhooks import get_or_create_webhook
 from helpers.database import (
-    init_db,
-    migrate_from_json,
     get_guild_config,
     increment_message_counter,
+    init_db,
+    migrate_from_json,
 )
+from helpers.text import split_message
+from helpers.webhooks import get_or_create_webhook
 
 TOKEN = os.getenv("DISCORD_TOKEN_MIRRORBOT")
 if not TOKEN:

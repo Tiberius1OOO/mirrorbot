@@ -30,18 +30,15 @@ def init_db():
     cursor = conn.cursor()
 
     # Guild settings
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS guilds (
             guild_id INTEGER PRIMARY KEY,
             error_channel INTEGER
         )
-        """
-    )
+        """)
 
     # Relay configurations
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS relays (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             guild_id INTEGER,
@@ -50,26 +47,28 @@ def init_db():
             delay INTEGER DEFAULT 0,
             UNIQUE(guild_id, source_channel)
         )
-        """
-    )
+        """)
 
     # Stats table
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS stats (
             guild_id INTEGER PRIMARY KEY,
             messages_copied INTEGER DEFAULT 0,
             FOREIGN KEY (guild_id) REFERENCES guilds(guild_id)
         )
+<<<<<<< HEAD
         """
     )
     cursor.execute(
         """
+=======
+        """)
+    c.execute("""
+>>>>>>> df20293fab374bc24d0f4437d37536684b42b7e5
         CREATE UNIQUE INDEX IF NOT EXISTS
         idx_relay_unique
         ON relays (guild_id, source_channel)
-        """
-    )
+        """)
 
     conn.commit()
     conn.close()

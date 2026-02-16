@@ -10,9 +10,9 @@ import asyncio
 import discord
 from discord import app_commands
 
+from helpers.database import increment_message_counter
 from helpers.text import split_message
 from helpers.webhooks import get_or_create_webhook
-from helpers.database import increment_message_counter
 
 
 def register(tree, client):

@@ -14,10 +14,10 @@ import discord
 from discord import app_commands
 
 from helpers.database import (
-    get_guild_config,
-    set_error_channel,
     add_relay,
+    get_guild_config,
     remove_relay,
+    set_error_channel,
 )
 
 

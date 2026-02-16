@@ -1,5 +1,5 @@
-import os
 import json
+import os
 import sqlite3
 
 # Database location
@@ -63,7 +63,7 @@ def init_db():
         )
         """
     )
-    c.execute(
+    cursor.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS
         idx_relay_unique

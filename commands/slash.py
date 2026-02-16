@@ -231,4 +231,21 @@ def register(tree, client):
             inline=False,
         )
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        error_channel_id = config["error_channel"]
+        channel = guild.get_channel(error_channel_id)
+
+        if not channel:
+            await interaction.response.send_message(
+                "Error channel not found.",
+                ephemeral=True,
+            )
+            return
+
+        # Send embed to error channel
+        await channel.send(embed=embed)
+
+        # Confirm to the user
+        await interaction.response.send_message(
+            "Bot info sent to error channel.",
+            ephemeral=True,
+        )

@@ -31,21 +31,12 @@ TOKEN = os.getenv("DISCORD_TOKEN_MIRRORBOT")
 if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN_MIRRORBOT environment variable not set.")
 
-config_locks = {}
-
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
-
-
-def get_guild_lock(guild_id: int):
-    if guild_id not in config_locks:
-        config_locks[guild_id] = asyncio.Lock()
-    return config_locks[guild_id]
-
 
 # Register command modules
 slash.register(tree, client)
@@ -119,9 +110,7 @@ async def on_message(message: discord.Message):
                     await asyncio.sleep(1.0)
 
                 # Update stats in DB
-                lock = get_guild_lock(guild.id)
-                async with lock:
-                    increment_message_counter(guild.id, 1)
+                increment_message_counter(guild.id, 1)
 
             except Exception as e:
                 print(f"[ERROR] Relay error: {e}")

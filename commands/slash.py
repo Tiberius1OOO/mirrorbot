@@ -12,12 +12,15 @@ Primary responsibilities:
 
 import discord
 from discord import app_commands
+import time
+from datetime import datetime
 
 from helpers.database import (
     add_relay,
     get_guild_config,
     remove_relay,
     set_error_channel,
+    get_connection,
 )
 
 
@@ -116,13 +119,12 @@ def register(tree, client):
 
     @tree.command(
         name="bot_info",
-        description="Send bot diagnostic info to the error channel",
+        description="Show detailed bot diagnostic information",
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def bot_info(interaction: discord.Interaction):
         """
-        Sends a diagnostic report to the configured
-        error channel.
+        Sends a structured diagnostic report using an embed.
         """
         guild = interaction.guild
         guild_id = guild.id
@@ -136,50 +138,97 @@ def register(tree, client):
             )
             return
 
+        # Uptime calculation
+        start_time = client.start_time
+        uptime_seconds = int(time.time() - start_time)
+        hours, remainder = divmod(uptime_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        uptime_str = f"{hours}h {minutes}m {seconds}s"
+        start_time_str = datetime.fromtimestamp(start_time).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+
+        # Relay info
         relays = config.get("relays", [])
+        relay_lines = []
+        for r in relays:
+            source = guild.get_channel(r["source"])
+            target = guild.get_channel(r["target"])
 
-        # Build relay info
-        if relays:
-            relay_lines = []
-            for r in relays:
-                source = guild.get_channel(r["source"])
-                target = guild.get_channel(r["target"])
+            source_name = source.name if source else f"Unknown({r['source']})"
+            target_name = target.name if target else f"Unknown({r['target']})"
 
-                source_name = source.name if source else f"Unknown({r['source']})"
-                target_name = target.name if target else f"Unknown({r['target']})"
+            relay_lines.append(f"{source_name} → {target_name} ({r['delay']}s)")
 
-                relay_lines.append(
-                    f"{source_name} → {target_name} | Delay: {r['delay']}s"
-                )
+        relay_text = "\n".join(relay_lines) if relay_lines else "No active relays"
 
-            relay_info = "\n".join(relay_lines)
-        else:
-            relay_info = "No active relays"
+        # DB structure info
+        conn = get_connection()
+        cursor = conn.cursor()
 
-        total_copied = config["stats"]["messages_copied"]
+        cursor.execute("SELECT COUNT(*) FROM guilds")
+        guild_count = cursor.fetchone()[0]
 
-        info_text = (
-            "**Bot Info Dump**\n"
-            f"- Relay Instances:\n{relay_info}\n\n"
-            f"- Server ID:\n{guild_id}\n\n"
-            f"- Command User:\n{user.id} - {user}\n\n"
-            f"- Stats:\n"
-            f"Messages copied total: {total_copied}"
+        cursor.execute("SELECT COUNT(*) FROM relays")
+        relay_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM stats")
+        stats_count = cursor.fetchone()[0]
+
+        conn.close()
+
+        # Build embed
+        embed = discord.Embed(
+            title="DragonCopy Bot Status",
+            color=discord.Color.blurple(),
+            timestamp=datetime.utcnow(),
         )
 
-        error_channel_id = config["error_channel"]
-        channel = guild.get_channel(error_channel_id)
-
-        if not channel:
-            await interaction.response.send_message(
-                "Error channel not found.",
-                ephemeral=True,
-            )
-            return
-
-        await channel.send(info_text)
-
-        await interaction.response.send_message(
-            "Bot info sent to error channel.",
-            ephemeral=True,
+        embed.add_field(
+            name="Server",
+            value=f"{guild.name}\nID: {guild_id}",
+            inline=False,
         )
+
+        embed.add_field(
+            name="User",
+            value=f"{user} ({user.id})",
+            inline=True,
+        )
+
+        embed.add_field(
+            name="Members",
+            value=str(guild.member_count),
+            inline=True,
+        )
+
+        embed.add_field(
+            name="Tracked Channels",
+            value=str(len(relays)),
+            inline=True,
+        )
+
+        embed.add_field(
+            name="Bot Uptime",
+            value=f"Started: {start_time_str}\nUptime: {uptime_str}",
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Database",
+            value=(
+                f"Guild entries: {guild_count}\n"
+                f"Relay entries: {relay_count}\n"
+                f"Stats entries: {stats_count}"
+            ),
+            inline=False,
+        )
+
+        embed.add_field(
+            name="Active Relays",
+            value=relay_text,
+            inline=False,
+        )
+
+        await interaction.response.send_message(embed=embed, ephemeral=True)

@@ -13,6 +13,8 @@ Handles:
 
 import asyncio
 import os
+import time
+
 
 import discord
 from discord import app_commands
@@ -129,6 +131,8 @@ async def on_ready():
     await tree.sync()
     print("Slash commands synced.")
     print("Database ready.")
+    client.start_time = START_TIME
 
 
+START_TIME = time.time()
 client.run(TOKEN)

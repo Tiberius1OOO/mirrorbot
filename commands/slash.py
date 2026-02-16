@@ -8,56 +8,22 @@ Primary responsibilities:
 • Setup and configuration commands
 • Relay management commands
 • Diagnostic commands
-
-Architecture
-------------
-All slash commands are defined inside a single `register`
-function. This function is called during bot startup and
-attaches commands to the global command tree.
-
-This design allows:
-• Clean separation from the main bot file
-• Modular command loading
-• Easier future expansion (e.g., multiple command modules)
-
-Command Categories
-------------------
-Setup:
-    /setup
-        Initializes the configuration for the server.
-
-Relay Control:
-    /start_relay
-        Creates a live relay between channels.
-    /stop_relay
-        Stops an existing relay.
-    /instances
-        Displays all active relays.
-
-Diagnostics:
-    /bot_info
-        Sends a detailed bot status report.
 """
 
 import discord
 from discord import app_commands
 
-from helpers.config import load_and_prepare_config, save_config
+from helpers.database import (
+    get_guild_config,
+    set_error_channel,
+    add_relay,
+    remove_relay,
+)
 
 
 def register(tree, client):
     """
     Registers all slash commands with the command tree.
-
-    This function is called during bot startup and
-    attaches commands to the global command system.
-
-    Args:
-        tree (app_commands.CommandTree):
-            The bot's command tree.
-
-        client (discord.Client):
-            The main Discord client instance.
     """
 
     @tree.command(name="setup", description="Initial bot setup")
@@ -65,21 +31,11 @@ def register(tree, client):
     async def setup_command(interaction: discord.Interaction):
         """
         Initializes the bot configuration for the server.
-
-        Sets the current channel as the error channel and
-        creates the default configuration structure.
-
-        Admin only.
+        Sets the current channel as the error channel.
         """
         guild_id = interaction.guild.id
 
-        config = {
-            "error_channel": interaction.channel.id,
-            "relays": [],
-            "stats": {"messages_copied": 0},
-        }
-
-        save_config(guild_id, config)
+        set_error_channel(guild_id, interaction.channel.id)
 
         await interaction.response.send_message(
             "Setup complete. This channel is now the error channel.",
@@ -97,24 +53,15 @@ def register(tree, client):
         """
         Creates a new relay from a source channel
         to a target channel.
-
-        Args:
-            source:
-                Channel to copy messages from.
-            target:
-                Channel to send relayed messages to.
-            delay_seconds:
-                Delay before messages are forwarded.
-
-        Admin only.
         """
         guild_id = interaction.guild.id
-        config = load_and_prepare_config(guild_id)
+        config = get_guild_config(guild_id)
 
         if not config:
             await interaction.response.send_message("Run /setup first.", ephemeral=True)
             return
 
+        # Check if relay already exists
         for r in config["relays"]:
             if r["source"] == source.id:
                 await interaction.response.send_message(
@@ -122,10 +69,7 @@ def register(tree, client):
                 )
                 return
 
-        config["relays"].append(
-            {"source": source.id, "target": target.id, "delay": delay_seconds}
-        )
-        save_config(guild_id, config)
+        add_relay(guild_id, source.id, target.id, delay_seconds)
 
         await interaction.response.send_message(
             f"Relay started: {source.mention} → {target.mention}",
@@ -137,24 +81,15 @@ def register(tree, client):
     async def stop_relay(interaction: discord.Interaction, source: discord.TextChannel):
         """
         Stops an existing relay from a source channel.
-
-        Removes the relay configuration for the
-        specified source channel.
-
-        Args:
-            source:
-                The source channel of the relay to stop.
-
-        Admin only.
         """
         guild_id = interaction.guild.id
-        config = load_and_prepare_config(guild_id)
+        config = get_guild_config(guild_id)
 
         if not config:
+            await interaction.response.send_message("Run /setup first.", ephemeral=True)
             return
 
-        config["relays"] = [r for r in config["relays"] if r["source"] != source.id]
-        save_config(guild_id, config)
+        remove_relay(guild_id, source.id)
 
         await interaction.response.send_message("Relay stopped.", ephemeral=True)
 
@@ -164,12 +99,8 @@ def register(tree, client):
         """
         Displays all active relay configurations
         for the current server.
-
-        Shows source and target channel pairs.
-
-        Admin only.
         """
-        config = load_and_prepare_config(interaction.guild.id)
+        config = get_guild_config(interaction.guild.id)
 
         if not config or not config["relays"]:
             await interaction.response.send_message("No active relays.", ephemeral=True)
@@ -192,23 +123,12 @@ def register(tree, client):
         """
         Sends a diagnostic report to the configured
         error channel.
-
-        The report includes:
-        • Active relay configurations
-        • Server ID
-        • Command issuer
-        • Message copy statistics
-
-        Useful for debugging and monitoring
-        bot activity.
-
-        Admin only.
         """
         guild = interaction.guild
         guild_id = guild.id
         user = interaction.user
 
-        config = load_and_prepare_config(guild_id)
+        config = get_guild_config(guild_id)
         if not config:
             await interaction.response.send_message(
                 "Setup not completed. Please run /setup first.",

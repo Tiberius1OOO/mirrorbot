@@ -3,30 +3,6 @@ Context Menu Commands
 =====================
 
 Registers right-click message context actions for the bot.
-
-Primary responsibilities:
-• Message-level actions via Discord's context menu
-• Manual copying of individual messages
-• Channel selection interface for copy targets
-
-Architecture
-------------
-Context commands are registered through a `register`
-function, similar to slash commands. This keeps all
-right-click logic isolated from the main bot file.
-
-User Flow
----------
-1. Administrator right-clicks a message.
-2. Selects "Apps → Copy message".
-3. Chooses a destination channel.
-4. Bot copies the message using a webhook.
-
-Features
---------
-• Preserves username and avatar
-• Supports attachments
-• Automatically splits long messages
 """
 
 import asyncio
@@ -36,18 +12,12 @@ from discord import app_commands
 
 from helpers.text import split_message
 from helpers.webhooks import get_or_create_webhook
+from helpers.database import increment_message_counter
 
 
 def register(tree, client):
     """
     Registers context menu commands with the bot.
-
-    Args:
-        tree (app_commands.CommandTree):
-            The bot's command tree.
-
-        client (discord.Client):
-            The main Discord client instance.
     """
 
     @tree.context_menu(name="Copy message")
@@ -58,17 +28,6 @@ def register(tree, client):
         """
         Opens a channel selector to copy a message
         into another channel.
-
-        The copied message preserves:
-        • Username
-        • Avatar
-        • Attachments
-        • Content formatting
-
-        Long messages are automatically split to
-        respect Discord's character limits.
-
-        Admin only.
         """
         view = CopyView(message)
         await interaction.response.send_message(
@@ -79,12 +38,6 @@ def register(tree, client):
 class CopyChannelSelect(discord.ui.ChannelSelect):
     """
     Channel selection UI component for message copying.
-
-    Allows an administrator to choose the destination
-    channel where the selected message will be copied.
-
-    Stores the original message and performs the copy
-    once a channel is selected.
     """
 
     def __init__(self, message: discord.Message):
@@ -98,15 +51,7 @@ class CopyChannelSelect(discord.ui.ChannelSelect):
 
     async def callback(self, interaction: discord.Interaction):
         """
-        Handles the channel selection event.
-
-        Copies the stored source message into the
-        selected channel using a webhook.
-
-        Features:
-        • Preserves author identity
-        • Supports attachments
-        • Splits long messages safely
+        Handles the channel selection event and copies the message.
         """
         selected_channel = self.values[0]
         guild = interaction.guild
@@ -145,6 +90,9 @@ class CopyChannelSelect(discord.ui.ChannelSelect):
                     )
                 await asyncio.sleep(1.0)
 
+            # Increment stats counter
+            increment_message_counter(guild.id, 1)
+
             await interaction.response.send_message("Message copied.", ephemeral=True)
 
         except Exception as e:
@@ -154,9 +102,6 @@ class CopyChannelSelect(discord.ui.ChannelSelect):
 class CopyView(discord.ui.View):
     """
     UI container for the message copy interface.
-
-    Holds the channel selection component and
-    manages the interaction timeout.
     """
 
     def __init__(self, message: discord.Message):

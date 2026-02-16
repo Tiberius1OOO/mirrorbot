@@ -63,6 +63,8 @@ def init_db():
         )
         """
     )
+
+    # Ensure uniqueness even on older databases
     cursor.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS
@@ -80,54 +82,66 @@ def init_db():
 # =========================================================
 
 
+def guild_exists(guild_id: int) -> bool:
+    """
+    Returns True if the guild already exists in the database.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM guilds WHERE guild_id = ?", (guild_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None
+
+
 def migrate_from_json():
     """
     Migrates old JSON configs into the SQLite database.
 
     After successful migration, the JSON file is renamed to:
     <guild_id>.migrated.json
+
+    This runs per guild and skips configs that already
+    exist in the database.
     """
     if not os.path.exists(CONFIG_FOLDER):
         return
 
     conn = get_connection()
-    c = conn.cursor()
+    cursor = conn.cursor()
 
     for filename in os.listdir(CONFIG_FOLDER):
-        if not filename.endswith(".json"):
+        # Skip non-JSON or already migrated files
+        if not filename.endswith(".json") or filename.endswith(".migrated.json"):
             continue
-
-        if filename.endswith(".migrated.json"):
-            continue  # already migrated
 
         guild_id = int(filename.replace(".json", ""))
         path = os.path.join(CONFIG_FOLDER, filename)
 
+        # Skip if guild already exists in DB
+        if guild_exists(guild_id):
+            continue
+
         with open(path, "r") as f:
             data = json.load(f)
 
-        # Check if guild already exists
-        c.execute("SELECT guild_id FROM guilds WHERE guild_id = ?", (guild_id,))
-        if c.fetchone():
-            continue
-
         # Insert guild
         error_channel = data.get("error_channel")
-        c.execute(
+        cursor.execute(
             "INSERT INTO guilds (guild_id, error_channel) VALUES (?, ?)",
             (guild_id, error_channel),
         )
 
         # Insert stats
         messages_copied = data.get("stats", {}).get("messages_copied", 0)
-        c.execute(
+        cursor.execute(
             "INSERT INTO stats (guild_id, messages_copied) VALUES (?, ?)",
             (guild_id, messages_copied),
         )
 
         # Insert relays
         for relay in data.get("relays", []):
-            c.execute(
+            cursor.execute(
                 """
                 INSERT INTO relays
                 (guild_id, source_channel, target_channel, delay)
@@ -137,7 +151,7 @@ def migrate_from_json():
                     guild_id,
                     relay["source"],
                     relay["target"],
-                    relay["delay"],
+                    relay.get("delay", 0),
                 ),
             )
 
@@ -160,10 +174,10 @@ def get_guild_config(guild_id: int):
     structure so the rest of the bot can use it unchanged.
     """
     conn = get_connection()
-    c = conn.cursor()
+    cursor = conn.cursor()
 
-    c.execute("SELECT error_channel FROM guilds WHERE guild_id = ?", (guild_id,))
-    row = c.fetchone()
+    cursor.execute("SELECT error_channel FROM guilds WHERE guild_id = ?", (guild_id,))
+    row = cursor.fetchone()
 
     if not row:
         conn.close()
@@ -175,11 +189,11 @@ def get_guild_config(guild_id: int):
         "stats": {"messages_copied": 0},
     }
 
-    c.execute(
+    cursor.execute(
         "SELECT source_channel, target_channel, delay FROM relays WHERE guild_id = ?",
         (guild_id,),
     )
-    for r in c.fetchall():
+    for r in cursor.fetchall():
         config["relays"].append(
             {
                 "source": r["source_channel"],
@@ -188,8 +202,8 @@ def get_guild_config(guild_id: int):
             }
         )
 
-    c.execute("SELECT messages_copied FROM stats WHERE guild_id = ?", (guild_id,))
-    stats_row = c.fetchone()
+    cursor.execute("SELECT messages_copied FROM stats WHERE guild_id = ?", (guild_id,))
+    stats_row = cursor.fetchone()
     if stats_row:
         config["stats"]["messages_copied"] = stats_row["messages_copied"]
 
@@ -203,15 +217,23 @@ def get_guild_config(guild_id: int):
 
 
 def set_error_channel(guild_id: int, channel_id: int):
+    """
+    Sets or updates the error channel for a guild.
+    """
     conn = get_connection()
-    c = conn.cursor()
+    cursor = conn.cursor()
 
-    c.execute(
-        "INSERT OR REPLACE INTO guilds (guild_id, error_channel) VALUES (?, ?)",
+    cursor.execute(
+        """
+        INSERT INTO guilds (guild_id, error_channel)
+        VALUES (?, ?)
+        ON CONFLICT(guild_id)
+        DO UPDATE SET error_channel = excluded.error_channel
+        """,
         (guild_id, channel_id),
     )
 
-    c.execute(
+    cursor.execute(
         "INSERT OR IGNORE INTO stats (guild_id, messages_copied) VALUES (?, 0)",
         (guild_id,),
     )
@@ -221,14 +243,21 @@ def set_error_channel(guild_id: int, channel_id: int):
 
 
 def add_relay(guild_id: int, source: int, target: int, delay: int):
+    """
+    Adds or replaces a relay for a source channel.
+    """
     conn = get_connection()
-    c = conn.cursor()
+    cursor = conn.cursor()
 
-    c.execute(
+    cursor.execute(
         """
-        INSERT OR REPLACE INTO relays
+        INSERT INTO relays
         (guild_id, source_channel, target_channel, delay)
         VALUES (?, ?, ?, ?)
+        ON CONFLICT(guild_id, source_channel)
+        DO UPDATE SET
+            target_channel = excluded.target_channel,
+            delay = excluded.delay
         """,
         (guild_id, source, target, delay),
     )
@@ -238,10 +267,13 @@ def add_relay(guild_id: int, source: int, target: int, delay: int):
 
 
 def remove_relay(guild_id: int, source: int):
+    """
+    Removes a relay from a source channel.
+    """
     conn = get_connection()
-    c = conn.cursor()
+    cursor = conn.cursor()
 
-    c.execute(
+    cursor.execute(
         "DELETE FROM relays WHERE guild_id = ? AND source_channel = ?",
         (guild_id, source),
     )
@@ -251,10 +283,13 @@ def remove_relay(guild_id: int, source: int):
 
 
 def increment_message_counter(guild_id: int, amount: int = 1):
+    """
+    Increments the copied message counter for a guild.
+    """
     conn = get_connection()
-    c = conn.cursor()
+    cursor = conn.cursor()
 
-    c.execute(
+    cursor.execute(
         """
         INSERT INTO stats (guild_id, messages_copied)
         VALUES (?, ?)

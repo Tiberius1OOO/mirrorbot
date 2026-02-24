@@ -15,7 +15,6 @@ import asyncio
 import os
 import time
 
-
 import discord
 from discord import app_commands
 

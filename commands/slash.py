@@ -10,17 +10,18 @@ Primary responsibilities:
 • Diagnostic commands
 """
 
-import discord
-from discord import app_commands
 import time
 from datetime import datetime
 
+import discord
+from discord import app_commands
+
 from helpers.database import (
     add_relay,
+    get_connection,
     get_guild_config,
     remove_relay,
     set_error_channel,
-    get_connection,
 )
 
 

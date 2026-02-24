@@ -1,44 +1,82 @@
 # DragonCopy Mirror Bot
 
-A lightweight Discord bot for copying and relaying messages between channels.
-Designed for long-term story servers, archive channels, and delayed relays.
+A lightweight Discord bot for copying, relaying, cutting, and managing messages between channels.  
+Designed for long-term story servers, archive channels, structured RP environments, and delayed relays.
 
 ---
 
 ## Features
-
-### Channel copy
-
-* Copy an entire channel into another one
-* Preserves usernames and avatars using webhooks
-* Automatically splits messages longer than Discord’s 2000-character limit
-* Supports attachments
-
-### Single message copy
-
-* Right-click any message
-* Select **Copy message**
-* Choose the target channel
 
 ### Live relays
 
 * Mirror messages from one channel to another
 * Optional delay (for spoiler buffers or moderation)
 * Multiple relays per server
+* Preserves usernames and avatars using webhooks
+* Automatically splits messages longer than Discord’s 2000-character limit
+* Supports attachments
 
-### Per-server configuration
+---
 
-* Each server gets its own config file
-* No overlap between communities
+### Single message copy
 
-### Error logging
+* Right-click any message
+* Select **Apps → Copy message**
+* Choose the target channel
+* Preserves author identity and attachments
+* Automatically handles long messages
 
-* Dedicated error channel per server
-* Admin-only control
+---
 
-### Basic stats
+### Cut everything from here
 
-* Tracks how many messages were copied
+* Right-click any message
+* Select **Apps → Cut everything from here**
+* Choose a target channel
+
+The bot will:
+
+1. Copy the selected message  
+2. Copy every message after it  
+3. Delete the original messages from the source channel  
+
+Preserves:
+
+* Author identity
+* Avatars
+* Attachments
+* Message order
+* Automatic long-message splitting
+
+Requires:
+
+* **Manage Messages** permission in the source channel
+
+---
+
+### Database (v1.1 Redesign)
+
+DragonCopy now uses a **SQLite database backend** instead of JSON configuration files.
+
+On first startup after upgrading from v1.0, old config files:
+
+    configs/<guild_id>.json
+
+are automatically migrated and renamed to:
+
+    <guild_id>.migrated.json
+
+After migration, the bot runs fully on the database.
+
+Database file location:
+
+    data/bot.db
+
+Tables:
+
+* guilds
+* relays
+* stats
 
 ---
 
@@ -48,83 +86,47 @@ All commands are **administrator-only**.
 
 ### Setup
 
-```
-/setup
-```
+    /setup
 
 Initial setup. Select the channel where the bot should send error messages.
 
 ---
 
-### Copy a full channel
-
-```
-/copy_channel
-```
-
-Opens a UI:
-
-1. Choose source channel
-2. Choose target channel
-3. Start copying
-
----
-
 ### Start a live relay
 
-```
-/start_relay source: target: delay_seconds:
-```
+    /start_relay source: target: delay_seconds:
 
 Example:
 
-```
-/start_relay source:#rp target:#archive delay_seconds:3600
-```
+    /start_relay source:#rp target:#archive delay_seconds:3600
 
 ---
 
 ### Stop a relay
 
-```
-/stop_relay source:
-```
+    /stop_relay source:
 
 ---
 
 ### Show active relays
 
-```
-/instances
-```
+    /instances
 
 ---
 
 ### Bot diagnostics
 
-```
-/bot_info
-```
+    /bot_info
 
----
+Posts a structured embed into the configured error channel including:
 
-### Test error channel
-
-```
-/test_error
-```
-
----
-
-## Message context command
-
-Right-click a message:
-
-```
-Apps → Copy message
-```
-
-Select the destination channel and the bot will mirror it.
+* Command user
+* Server name and ID
+* Member count
+* Bot start time
+* Uptime
+* Active relay count
+* Database entry counts
 
 ---
 
@@ -134,7 +136,7 @@ Select the destination channel and the bot will mirror it.
 
 * Python 3.10+
 * Discord bot token
-* `discord.py`
+* discord.py
 
 ---
 
@@ -149,14 +151,14 @@ cd mirrorbot
 
 ### Create virtual environment
 
-**Linux/macOS**
+Linux / macOS:
 
 ```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
-**Windows**
+Windows:
 
 ```bash
 python -m venv venv
@@ -173,15 +175,15 @@ pip install discord.py
 
 ---
 
-### Set the bot token
+### Set bot token
 
-**Linux/macOS**
+Linux / macOS:
 
 ```bash
 export DISCORD_TOKEN_MIRRORBOT="your_token_here"
 ```
 
-**Windows**
+Windows (PowerShell):
 
 ```powershell
 $env:DISCORD_TOKEN_MIRRORBOT="your_token_here"
@@ -197,51 +199,27 @@ python bot.py
 
 ---
 
-## Configuration
-
-Each server gets its own config file:
-
-```
-configs/<guild_id>.json
-```
-
-Example structure:
-
-```json
-{
-  "error_channel": 1234567890,
-  "relays": [],
-  "stats": {
-    "messages_copied": 0
-  }
-}
-```
-
----
-
 ## Required Permissions
 
 The bot needs:
 
+* View Channel
 * Send Messages
+* Embed Links
 * Manage Webhooks
 * Read Message History
 * Attach Files
+* Manage Messages (required for cut operations)
 
 ---
 
 ## Known Limitations
 
-* Pending relay messages are lost if the bot restarts during the delay
-* Very large channel copies may take hours due to rate limits
-* Uses file-based config instead of a database by design
+* Messages older than 14 days cannot be bulk-deleted (Discord API limitation)
+* Large cut operations may take time due to rate limits
+* Pending delayed relay messages are lost if the bot restarts during the delay
 
 ---
-
-## Purpose
-
-Originally built for collaborative sci-fi writing servers to manage mirrored RP channels, spoiler buffers, and archive copies.
-Designed to be simple, transparent, and easy to host on low-power hardware like a Raspberry Pi.
 
 ## License
 

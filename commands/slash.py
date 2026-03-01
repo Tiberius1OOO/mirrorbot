@@ -23,7 +23,7 @@ from helpers.database import (
     remove_relay,
     set_error_channel,
 )
-from helpers.epub_generator import collect_channel_content, generate_epub
+from helpers.epub_generator import generate_epub
 
 
 def register(tree, client):
@@ -120,8 +120,71 @@ def register(tree, client):
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
     @tree.command(
+        name="generate_book_beta",
+        description="Generate a Beta EPUB (with post links)",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def generate_book_beta(
+        interaction: discord.Interaction,
+        title: str,
+        author: str,
+        source_channel: discord.TextChannel,
+        upload_channel: discord.TextChannel,
+        invite_link: str,
+        cover_image: discord.Attachment | None = None,
+        summary: str = "",
+        chapter_file: discord.Attachment | None = None,
+    ):
+        await interaction.response.defer(thinking=True)
+
+        try:
+            cover_bytes = await cover_image.read() if cover_image else None
+            chapter_content = (
+                (await chapter_file.read()).decode("utf-8") if chapter_file else None
+            )
+
+            result = await generate_epub(
+                title=title,
+                author=author,
+                source_channel=source_channel,
+                guild_id=interaction.guild.id,
+                guild_name=interaction.guild.name,
+                invite_link=invite_link,
+                beta_mode=True,
+                cover_bytes=cover_bytes,
+                summary=summary,
+                chapter_file_content=chapter_content,
+            )
+
+            writer_list = ", ".join(result["writers"])
+
+            await upload_channel.send(
+                content=(
+                    f"📘 **BETA Book Generated**\n\n"
+                    f"**Title:** {title}\n"
+                    f"**Requested by:** {interaction.user.mention}\n"
+                    f"**Word Count:** {result['word_count']}\n"
+                    f"**Messages:** {result['message_count']}\n"
+                    f"**Chapters:** {result['chapter_count']}\n"
+                    f"**Writers:** {writer_list}"
+                ),
+                file=discord.File(result["path"]),
+            )
+
+            await interaction.followup.send(
+                "Beta book successfully generated.",
+                ephemeral=True,
+            )
+
+        except Exception as e:
+            await interaction.followup.send(
+                f"Error generating beta book: {e}",
+                ephemeral=True,
+            )
+
+    @tree.command(
         name="generate_book",
-        description="Generate an EPUB book from a Discord channel",
+        description="Generate a clean publication EPUB",
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def generate_book(
@@ -130,49 +193,45 @@ def register(tree, client):
         author: str,
         source_channel: discord.TextChannel,
         upload_channel: discord.TextChannel,
-        cover_image: discord.Attachment,
         invite_link: str,
+        cover_image: discord.Attachment | None = None,
         summary: str = "",
-        trigger: str = "",
+        chapter_file: discord.Attachment | None = None,
     ):
-        """
-        Generates an EPUB file from a channel's message history.
-        """
-
         await interaction.response.defer(thinking=True)
 
         try:
-            # Download cover image
-            cover_bytes = await cover_image.read()
-
-            # Collect channel content
-            collected_data = await collect_channel_content(
-                source_channel=source_channel,
-                trigger=trigger,
+            cover_bytes = await cover_image.read() if cover_image else None
+            chapter_content = (
+                (await chapter_file.read()).decode("utf-8") if chapter_file else None
             )
 
-            if collected_data["message_count"] == 0:
-                await interaction.followup.send(
-                    "No messages found in source channel.",
-                    ephemeral=True,
-                )
-                return
-
-            # Generate EPUB
-            output_path = await generate_epub(
+            result = await generate_epub(
                 title=title,
                 author=author,
-                summary=summary,
-                cover_bytes=cover_bytes,
-                collected_data=collected_data,
+                source_channel=source_channel,
+                guild_id=interaction.guild.id,
                 guild_name=interaction.guild.name,
                 invite_link=invite_link,
+                beta_mode=False,
+                cover_bytes=cover_bytes,
+                summary=summary,
+                chapter_file_content=chapter_content,
             )
 
-            # Upload file
+            writer_list = ", ".join(result["writers"])
+
             await upload_channel.send(
-                content=f"Generated book: **{title}**",
-                file=discord.File(output_path),
+                content=(
+                    f"📘 **Book Generated**\n\n"
+                    f"**Title:** {title}\n"
+                    f"**Requested by:** {interaction.user.mention}\n"
+                    f"**Word Count:** {result['word_count']}\n"
+                    f"**Messages:** {result['message_count']}\n"
+                    f"**Chapters:** {result['chapter_count']}\n"
+                    f"**Writers:** {writer_list}"
+                ),
+                file=discord.File(result["path"]),
             )
 
             await interaction.followup.send(
@@ -185,52 +244,6 @@ def register(tree, client):
                 f"Error generating book: {e}",
                 ephemeral=True,
             )
-
-    @tree.command(
-        name="test_collect",
-        description="Test content collection for book generation",
-    )
-    @app_commands.checks.has_permissions(administrator=True)
-    async def test_collect(
-        interaction: discord.Interaction,
-        source_channel: discord.TextChannel,
-        trigger: str = "0",
-    ):
-        """
-        Tests the content collection engine.
-        Does not generate EPUB yet.
-        """
-
-        await interaction.response.defer(thinking=True, ephemeral=True)
-
-        data = await collect_channel_content(
-            source_channel=source_channel,
-            trigger=trigger,
-        )
-
-        chapters = data["chapters"]
-        writers = data["writers"]
-        word_count = data["word_count"]
-        message_count = data["message_count"]
-        start_date = data["start_date"]
-        end_date = data["end_date"]
-
-        if start_date and end_date:
-            timespan = (
-                f"{start_date.strftime('%d.%m.%Y')} – {end_date.strftime('%d.%m.%Y')}"
-            )
-        else:
-            timespan = "No messages found"
-
-        result_text = (
-            f"Chapters: {len(chapters)}\n"
-            f"Writers detected: {len(writers)}\n"
-            f"Word count: {word_count}\n"
-            f"Total messages: {message_count}\n"
-            f"Timespan: {timespan}"
-        )
-
-        await interaction.followup.send(result_text, ephemeral=True)
 
     @tree.command(
         name="bot_info",

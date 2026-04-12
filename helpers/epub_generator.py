@@ -72,10 +72,12 @@ def parse_chapter_file(content: str) -> Dict[int, str]:
 def _is_forum_parent_channel(ch: Any) -> bool:
     """True if this is a forum (or media) listing channel, not a post/thread."""
     t = getattr(ch, "type", None)
-    if t == discord.ChannelType.guild_forum:
-        return True
-    if hasattr(discord.ChannelType, "media") and t == discord.ChannelType.media:
-        return True
+    if t is not None:
+        ct = discord.ChannelType
+        # discord.py uses ``forum``; some versions also expose ``guild_forum`` / ``media``
+        for name in ("forum", "guild_forum", "media"):
+            if hasattr(ct, name) and t == getattr(ct, name):
+                return True
     return isinstance(ch, discord.ForumChannel)
 
 

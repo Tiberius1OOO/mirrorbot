@@ -23,7 +23,7 @@ from helpers.database import (
     remove_relay,
     set_error_channel,
 )
-from helpers.epub_generator import generate_epub
+from helpers.epub_generator import generate_epub, resolve_book_channel
 
 
 def register(tree, client):
@@ -123,19 +123,34 @@ def register(tree, client):
         name="generate_book_beta",
         description="Generate a Beta EPUB (with post links)",
     )
+    @app_commands.describe(
+        source_channel="Text/announcement channel or a thread (e.g. forum topic) to export",
+        upload_channel="Channel or thread where the EPUB file is posted",
+    )
     @app_commands.checks.has_permissions(administrator=True)
     async def generate_book_beta(
         interaction: discord.Interaction,
         title: str,
         author: str,
-        source_channel: discord.TextChannel,
-        upload_channel: discord.TextChannel,
+        source_channel: discord.TextChannel | discord.Thread,
+        upload_channel: discord.TextChannel | discord.Thread,
         invite_link: str,
         cover_image: discord.Attachment | None = None,
         summary: str = "",
         chapter_file: discord.Attachment | None = None,
     ):
         await interaction.response.defer(thinking=True)
+
+        try:
+            source = await resolve_book_channel(
+                interaction.client, interaction.guild, source_channel
+            )
+            upload = await resolve_book_channel(
+                interaction.client, interaction.guild, upload_channel
+            )
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+            return
 
         try:
             cover_bytes = await cover_image.read() if cover_image else None
@@ -146,7 +161,7 @@ def register(tree, client):
             result = await generate_epub(
                 title=title,
                 author=author,
-                source_channel=source_channel,
+                source_channel=source,
                 guild_id=interaction.guild.id,
                 guild_name=interaction.guild.name,
                 invite_link=invite_link,
@@ -159,7 +174,7 @@ def register(tree, client):
 
             writer_list = ", ".join(result["writers"])
 
-            await upload_channel.send(
+            await upload.send(
                 content=(
                     f"📘 **BETA Book Generated**\n\n"
                     f"**Title:** {title}\n"
@@ -187,19 +202,34 @@ def register(tree, client):
         name="generate_book",
         description="Generate a clean publication EPUB",
     )
+    @app_commands.describe(
+        source_channel="Text/announcement channel or a thread (e.g. forum topic) to export",
+        upload_channel="Channel or thread where the EPUB file is posted",
+    )
     @app_commands.checks.has_permissions(administrator=True)
     async def generate_book(
         interaction: discord.Interaction,
         title: str,
         author: str,
-        source_channel: discord.TextChannel,
-        upload_channel: discord.TextChannel,
+        source_channel: discord.TextChannel | discord.Thread,
+        upload_channel: discord.TextChannel | discord.Thread,
         invite_link: str,
         cover_image: discord.Attachment | None = None,
         summary: str = "",
         chapter_file: discord.Attachment | None = None,
     ):
         await interaction.response.defer(thinking=True)
+
+        try:
+            source = await resolve_book_channel(
+                interaction.client, interaction.guild, source_channel
+            )
+            upload = await resolve_book_channel(
+                interaction.client, interaction.guild, upload_channel
+            )
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+            return
 
         try:
             cover_bytes = await cover_image.read() if cover_image else None
@@ -210,7 +240,7 @@ def register(tree, client):
             result = await generate_epub(
                 title=title,
                 author=author,
-                source_channel=source_channel,
+                source_channel=source,
                 guild_id=interaction.guild.id,
                 guild_name=interaction.guild.name,
                 invite_link=invite_link,
@@ -223,7 +253,7 @@ def register(tree, client):
 
             writer_list = ", ".join(result["writers"])
 
-            await upload_channel.send(
+            await upload.send(
                 content=(
                     f"📘 **Book Generated**\n\n"
                     f"**Title:** {title}\n"

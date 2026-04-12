@@ -4,7 +4,7 @@ import os
 import re
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import discord
 from ebooklib import epub
@@ -69,7 +69,58 @@ def parse_chapter_file(content: str) -> Dict[int, str]:
 # =========================================================
 
 
-async def collect_messages(source_channel):
+def _is_forum_parent_channel(ch: Any) -> bool:
+    """True if this is a forum (or media) listing channel, not a post/thread."""
+    t = getattr(ch, "type", None)
+    if t == discord.ChannelType.guild_forum:
+        return True
+    if hasattr(discord.ChannelType, "media") and t == discord.ChannelType.media:
+        return True
+    return isinstance(ch, discord.ForumChannel)
+
+
+async def resolve_book_channel(
+    client: discord.Client,
+    guild: Optional[discord.Guild],
+    channel: discord.abc.GuildChannel | discord.Thread | Any,
+) -> discord.TextChannel | discord.Thread:
+    """
+    Ensure we have a full TextChannel or Thread (slash picks may be partial).
+    Rejects forum/media parents — export must target a thread or text channel.
+    """
+    if _is_forum_parent_channel(channel):
+        raise ValueError(
+            "Choose a **forum post** (open the topic — it is a thread), not the forum "
+            "channel itself."
+        )
+    if isinstance(channel, (discord.TextChannel, discord.Thread)):
+        return channel
+    if guild is None:
+        raise ValueError("Book export must be used in a server.")
+
+    full = guild.get_channel_or_thread(channel.id)
+    if _is_forum_parent_channel(full):
+        raise ValueError(
+            "Choose a **forum post** (the topic thread), not the forum channel listing."
+        )
+    if isinstance(full, (discord.TextChannel, discord.Thread)):
+        return full
+
+    fetched = await client.fetch_channel(channel.id)
+    if _is_forum_parent_channel(fetched):
+        raise ValueError(
+            "Choose a **forum post** (the topic thread), not the forum channel listing."
+        )
+    if isinstance(fetched, (discord.TextChannel, discord.Thread)):
+        return fetched
+
+    raise ValueError(
+        "Unsupported channel type. Use a text channel, announcement channel, or a thread "
+        "(e.g. a forum topic)."
+    )
+
+
+async def collect_messages(source_channel: discord.TextChannel | discord.Thread):
     messages = []
 
     async for message in source_channel.history(limit=None, oldest_first=True):
@@ -211,7 +262,7 @@ async def generate_epub(
     *,
     title: str,
     author: str,
-    source_channel,
+    source_channel: discord.TextChannel | discord.Thread,
     guild_id: int,
     guild_name: str,
     invite_link: str,

@@ -48,7 +48,7 @@ Administrator slash commands build an **EPUB** from a text channel’s history (
 Shared options:
 
 - **title**, **author** — book metadata  
-- **source_channel** — channel to read from (full history, oldest first)  
+- **source_channel** — text or announcement **channel**, or a **thread** (including a **forum topic** / side-story post). History is read oldest → newest. Do **not** pick the forum *listing* channel — open the topic and select that **thread**.  
 - **upload_channel** — where the generated `.epub` is posted  
 - **invite_link** — shown on the info page inside the book  
 - **cover_image** (optional) — cover for the EPUB  
@@ -174,7 +174,7 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
-If you skip this and later **merge or pull** a version that added packages (for example EPUB support), starting **`python bot.py`** will detect missing imports and run **`pip install -r requirements.txt`** automatically once (requires network access). If that fails, run the command above manually in the same environment you use to run the bot.
+If you skip this and later **merge or pull** a version that added packages (for example EPUB support), starting `**python bot.py`** will detect missing imports and run `**pip install -r requirements.txt**` automatically once (requires network access). If that fails, run the command above manually in the same environment you use to run the bot.
 
 ### Set the bot token
 

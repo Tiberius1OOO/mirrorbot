@@ -36,26 +36,43 @@ Preserves the same behavior as copy for identity, attachments, and splitting. Re
 
 ### EPUB export (books)
 
-Administrator slash commands build an **EPUB** from a text channel’s history (non-empty messages; **webhook** messages are kept, ordinary **bot** messages are skipped):
+Administrator slash commands build an **EPUB** from message history (non-empty messages; **webhook** messages are kept, ordinary **bot** messages are skipped).
 
+| Command | Purpose |
+|--------|---------|
+| `/generate_book` | Clean publication build (no per-post Discord links in the story body). |
+| `/generate_book_beta` | Same export, but each in-world post can include a **“To Post”** link back to Discord. |
 
-| Command               | Purpose                                                           |
-| --------------------- | ----------------------------------------------------------------- |
-| `/generate_book`      | “Clean” publication build (no per-post Discord links in the body) |
-| `/generate_book_beta` | Same pipeline with **“To Post”** links after each paragraph block |
+#### How to run a book command
 
+1. Type `/generate_book` or `/generate_book_beta` in a channel where you can use the bot (any channel is fine; it does not change what you export).
+2. Discord shows a form with **options** (fields). Fill in the **required** ones first, then add **optional** ones if you want them.
+3. **Required options** must all be set before you can submit. **Optional** options can be left empty or not attached.
+4. Submit the command. The bot reads the **source**, builds the EPUB, and posts the finished file as an attachment in **upload_channel** (and confirms to you ephemerally).
 
-Shared options:
+#### Required options (both commands)
 
-- **title**, **author** — book metadata  
-- **source_channel** — text or announcement **channel**, or a **thread** (including a **forum topic** / side-story post). History is read oldest → newest. Do **not** pick the forum *listing* channel — open the topic and select that **thread**.  
-- **upload_channel** — where the generated `.epub` is posted  
-- **invite_link** — shown on the info page inside the book  
-- **cover_image** (optional) — cover for the EPUB  
-- **summary** (optional) — extra page at the end  
-- **chapter_file** (optional) — a `**.txt` file** you **upload** as the attachment for this option when you run the command
+These always appear and must be filled:
 
-#### Chapter file (how it works)
+| Option | What to enter |
+|--------|----------------|
+| **title** | Book title as it should appear on the cover and title page. |
+| **author** | Author line for the EPUB metadata (can be a pen name or “Various”). |
+| **source_channel** | Where the story lives: a **text** or **announcement** channel, or a **thread** (e.g. a **forum topic** / side-story post). The bot reads full history **oldest → newest**. **Do not** select the forum *listing* channel — open the topic and pick that **thread**. |
+| **upload_channel** | Where the bot should **post the `.epub` file** when it is done (any text channel or thread the bot can send files in). |
+
+#### Optional options (both commands)
+
+You can skip any of these; the EPUB still generates.
+
+| Option | What it does |
+|--------|----------------|
+| **invite_link** | If you paste a **permanent server invite URL**, it is shown on the EPUB **info** page under “Generated from”. Leave **empty** to omit the link (only the server name appears). |
+| **cover_image** | Attach an image file to use as the **cover**. |
+| **summary** | Short text; if set, the EPUB gets an extra **Summary** page at the end. |
+| **chapter_file** | Attach a `.txt` file that defines **chapter titles** and **breaks** (see below). Without it, the book is one continuous flow of posts (still split into EPUB chapters internally only if you use a chapter file). |
+
+#### Chapter file (optional)
 
 Use this when you want **named chapters** in the EPUB instead of one continuous run of posts.
 
@@ -69,8 +86,8 @@ Use this when you want **named chapters** in the EPUB instead of one continuous 
 <message_id>,"Chapter title"
 ```
 
-- `**message_id**` — the numeric **Discord message ID** (snowflake) of the post that should **start** that chapter. Each message in Discord has its **own** ID, so each new chapter uses a **different** ID: the ID of the **first message** that belongs to that chapter.  
-- `**"Chapter title"`** — the title shown in the EPUB for that chapter (in straight double quotes).
+- **message_id** — the numeric **Discord message ID** (snowflake) of the post that should **start** that chapter. Each message has its **own** ID, so each new chapter line uses a **different** ID (the first message of that chapter).  
+- **"Chapter title"** — the title for that chapter in straight double quotes.
 
 **What the bot does with the file:** It loads the channel **oldest → newest** (same order as the story). It walks through messages in that order. Whenever it reaches a message whose ID appears in your file, it **starts a new chapter**: it inserts a chapter heading, uses the **title from that line**, and numbers chapters automatically (**Chapter 1**, **Chapter 2**, …). Content **before** the first listed ID stays in the opening section without a chapter title from the file. Content **after** each listed ID belongs to that chapter until the next listed ID (or the end of the channel).
 
@@ -99,7 +116,7 @@ Generated EPUB files are written under `data/<guild_id>/` (existing `.epub` file
 
 ### Database (SQLite)
 
-Configuration lives in `**data/bot.db`** (not JSON at runtime).
+Configuration lives in `data/bot.db` (not JSON at runtime).
 
 On first startup after upgrading from older JSON configs, files in:
 

@@ -126,6 +126,7 @@ def register(tree, client):
     @app_commands.describe(
         source_channel="Text/announcement channel or a thread (e.g. forum topic) to export",
         upload_channel="Channel or thread where the EPUB file is posted",
+        invite_link="Optional: permanent invite URL on the EPUB info page; leave empty to omit",
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def generate_book_beta(
@@ -134,7 +135,7 @@ def register(tree, client):
         author: str,
         source_channel: discord.TextChannel | discord.Thread,
         upload_channel: discord.TextChannel | discord.Thread,
-        invite_link: str,
+        invite_link: str = "",
         cover_image: discord.Attachment | None = None,
         summary: str = "",
         chapter_file: discord.Attachment | None = None,
@@ -205,6 +206,7 @@ def register(tree, client):
     @app_commands.describe(
         source_channel="Text/announcement channel or a thread (e.g. forum topic) to export",
         upload_channel="Channel or thread where the EPUB file is posted",
+        invite_link="Optional: permanent invite URL on the EPUB info page; leave empty to omit",
     )
     @app_commands.checks.has_permissions(administrator=True)
     async def generate_book(
@@ -213,7 +215,7 @@ def register(tree, client):
         author: str,
         source_channel: discord.TextChannel | discord.Thread,
         upload_channel: discord.TextChannel | discord.Thread,
-        invite_link: str,
+        invite_link: str = "",
         cover_image: discord.Attachment | None = None,
         summary: str = "",
         chapter_file: discord.Attachment | None = None,

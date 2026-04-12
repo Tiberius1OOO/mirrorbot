@@ -267,7 +267,7 @@ async def generate_epub(
     source_channel: discord.TextChannel | discord.Thread,
     guild_id: int,
     guild_name: str,
-    invite_link: str,
+    invite_link: str = "",
     beta_mode: bool,
     guild: Optional[discord.Guild] = None,
     cover_bytes: Optional[bytes] = None,
@@ -467,7 +467,10 @@ async def generate_epub(
         )
 
     safe_guild = html.escape(guild_name, quote=True)
-    safe_invite = html.escape(invite_link, quote=True)
+    invite_html = ""
+    if invite_link.strip():
+        safe_invite = html.escape(invite_link.strip(), quote=True)
+        invite_html = f'<br/><a href="{safe_invite}">{safe_invite}</a>'
 
     info_page = epub.EpubHtml(title="Info", file_name="info.xhtml")
     info_page.content = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -479,8 +482,7 @@ async def generate_epub(
 <body>
 <h2>Generated from</h2>
 <p style="text-align:center;">
-<strong>{safe_guild}</strong><br/>
-<a href="{safe_invite}">{safe_invite}</a>
+<strong>{safe_guild}</strong>{invite_html}
 </p>
 <hr/>
 <h2>Writers</h2>

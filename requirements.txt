@@ -1,0 +1,8 @@
+# Discord API (bot framework)
+discord.py>=2.3.0,<3
+
+# EPUB export (/generate_book, /generate_book_beta)
+ebooklib>=0.18
+
+# HTTP client for avatar images during EPUB generation
+aiohttp>=3.9.0,<4

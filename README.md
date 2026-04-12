@@ -174,6 +174,8 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
+If you skip this and later **merge or pull** a version that added packages (for example EPUB support), starting **`python bot.py`** will detect missing imports and run **`pip install -r requirements.txt`** automatically once (requires network access). If that fails, run the command above manually in the same environment you use to run the bot.
+
 ### Set the bot token
 
 **Linux / macOS**

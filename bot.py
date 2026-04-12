@@ -11,6 +11,56 @@ Handles:
 • Database initialization and migration
 """
 
+import subprocess
+import sys
+from pathlib import Path
+
+
+def _ensure_dependencies():
+    """
+    If core third-party packages are missing (e.g. after pulling a newer
+    release without running pip), install from requirements.txt once.
+    """
+    root = Path(__file__).resolve().parent
+    req = root / "requirements.txt"
+    if not req.is_file():
+        return
+
+    def _imports_ok():
+        try:
+            import discord  # noqa: F401
+            import ebooklib  # noqa: F401
+            import aiohttp  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    if _imports_ok():
+        return
+
+    print("[DragonCopy] Missing packages; installing from requirements.txt ...")
+    try:
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "-r", str(req)],
+            cwd=str(root),
+        )
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            "Failed to install dependencies with pip. "
+            "Install manually: pip install -r requirements.txt"
+        ) from e
+
+    if not _imports_ok():
+        raise RuntimeError(
+            "Dependencies still missing after pip install. "
+            "Restart the bot or run: pip install -r requirements.txt"
+        )
+
+    print("[DragonCopy] Dependencies installed successfully.")
+
+
+_ensure_dependencies()
+
 import asyncio
 import os
 import time

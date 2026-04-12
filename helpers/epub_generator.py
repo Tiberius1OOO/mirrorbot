@@ -1,10 +1,12 @@
 import asyncio
+import html
 import os
 import re
 import uuid
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
+import discord
 from ebooklib import epub
 
 
@@ -97,7 +99,8 @@ def render_messages(messages, chapter_map: Dict[int, str], beta_mode: bool):
     current_chapter = []
     chapter_count = 0
 
-    writers = {}  # normalized by display_name.lower()
+    writers: Dict[int, dict] = {}
+    writer_ids: List[int] = []
     word_count = 0
     message_count = 0
     first_timestamp = None
@@ -111,14 +114,14 @@ def render_messages(messages, chapter_map: Dict[int, str], beta_mode: bool):
 
         display_name = message.author.display_name
         avatar_url = message.author.display_avatar.url
+        uid = message.author.id
 
-        writer_key = display_name.lower()
-
-        if writer_key not in writers:
-            writers[writer_key] = {
+        if uid not in writers:
+            writers[uid] = {
                 "display_name": display_name,
                 "avatar_url": avatar_url,
             }
+            writer_ids.append(uid)
 
         if message.id in chapter_map:
             if current_chapter:
@@ -161,11 +164,42 @@ def render_messages(messages, chapter_map: Dict[int, str], beta_mode: bool):
     return {
         "chapters": chapters,
         "writers": writers,
+        "writer_ids": writer_ids,
         "word_count": word_count,
         "message_count": message_count,
         "start_date": first_timestamp,
         "end_date": last_timestamp,
     }
+
+
+# =========================================================
+# WRITER INFO (INFO PAGE)
+# =========================================================
+
+
+def _format_discord_handle(user: discord.abc.User) -> str:
+    """Unique @username (legacy users include discriminator when not 0)."""
+    if user.discriminator != "0":
+        return f"@{user.name}#{user.discriminator}"
+    return f"@{user.name}"
+
+
+def _format_joined(member: Optional[discord.Member]) -> str:
+    if member is None or member.joined_at is None:
+        return "Unknown"
+    return member.joined_at.strftime("%d.%m.%Y")
+
+
+async def _resolve_member(guild: Optional[discord.Guild], user_id: int) -> Optional[discord.Member]:
+    if guild is None:
+        return None
+    m = guild.get_member(user_id)
+    if m is not None:
+        return m
+    try:
+        return await guild.fetch_member(user_id)
+    except (discord.NotFound, discord.HTTPException):
+        return None
 
 
 # =========================================================
@@ -182,6 +216,7 @@ async def generate_epub(
     guild_name: str,
     invite_link: str,
     beta_mode: bool,
+    guild: Optional[discord.Guild] = None,
     cover_bytes: Optional[bytes] = None,
     summary: str = "",
     chapter_file_content: Optional[str] = None,
@@ -236,21 +271,39 @@ async def generate_epub(
         opacity: 0.65;
     }
 
-    .author-block {
-        margin-bottom: 25px;
-        clear: both;
+    .author-row {
+        display: table;
+        width: 100%;
+        margin-bottom: 1.25em;
+        page-break-inside: avoid;
+    }
+
+    .author-row .avatar-cell {
+        display: table-cell;
+        width: 5.5em;
+        vertical-align: top;
+    }
+
+    .author-row .text-cell {
+        display: table-cell;
+        vertical-align: top;
+        padding-left: 0.75em;
     }
 
     .author-avatar {
-        float: left;
-        width: 70px;
-        height: 70px;
+        width: 5em;
+        height: 5em;
+        max-width: 5em;
+        max-height: 5em;
+        object-fit: cover;
         border-radius: 50%;
-        margin-right: 15px;
+        border: 1px solid #999;
+        display: block;
     }
 
-    .author-info {
-        overflow: hidden;
+    .author-line {
+        margin: 0 0 0.35em 0;
+        line-height: 1.35em;
     }
 
     .code-block {
@@ -296,37 +349,62 @@ async def generate_epub(
 
     import aiohttp
 
-    async with aiohttp.ClientSession() as session:
-        for key, writer in rendered["writers"].items():
-            display_name = writer["display_name"]
-            avatar_url = writer["avatar_url"]
+    writer_ids = rendered.get("writer_ids") or list(rendered["writers"].keys())
+    resolved_by_id: Dict[int, Optional[discord.Member]] = {}
 
+    async with aiohttp.ClientSession() as session:
+        for uid in writer_ids:
+            writer = rendered["writers"][uid]
+            member = await _resolve_member(guild, uid)
+            resolved_by_id[uid] = member
+
+            display_name = (
+                member.display_name if member is not None else writer["display_name"]
+            )
+            if member is not None:
+                handle_text = _format_discord_handle(member)
+                joined_text = _format_joined(member)
+            else:
+                handle_text = "Not in server (webhook or left server)"
+                joined_text = "Unknown"
+
+            avatar_url = writer["avatar_url"]
+            safe_name = html.escape(display_name, quote=True)
+            safe_handle = html.escape(handle_text, quote=True)
+            safe_joined = html.escape(joined_text, quote=True)
+
+            img_html = ""
             try:
                 async with session.get(avatar_url) as resp:
                     avatar_bytes = await resp.read()
 
-                filename = f"avatar_{key}.jpg"
+                filename = f"avatar_{uid}.jpg"
 
                 book.add_item(
                     epub.EpubItem(
-                        uid=f"avatar_{key}",
+                        uid=f"avatar_{uid}",
                         file_name=f"images/{filename}",
                         media_type="image/jpeg",
                         content=avatar_bytes,
                     )
                 )
 
-                writers_html += f"""
-                <div class="author-block">
-                    <img src="images/{filename}" class="author-avatar"/>
-                    <div class="author-info">
-                        <strong>{display_name}</strong>
-                    </div>
-                </div>
-                """
-
+                img_html = (
+                    f'<img src="images/{filename}" class="author-avatar" alt="" />'
+                )
             except Exception:
-                writers_html += f"<p><strong>{display_name}</strong></p>"
+                img_html = '<div class="author-avatar"></div>'
+
+            writers_html += f"""
+            <div class="author-row">
+                <div class="avatar-cell">{img_html}</div>
+                <div class="text-cell">
+                    <p class="author-line"><strong>Discord name:</strong> {safe_name}</p>
+                    <p class="author-line"><strong>Discord @:</strong> {safe_handle}</p>
+                    <p class="author-line"><strong>Joined:</strong> {safe_joined}</p>
+                </div>
+            </div>
+            """
 
     timespan = "N/A"
     if rendered["start_date"] and rendered["end_date"]:
@@ -335,25 +413,31 @@ async def generate_epub(
             f"{rendered['end_date'].strftime('%d.%m.%Y')}"
         )
 
+    safe_guild = html.escape(guild_name, quote=True)
+    safe_invite = html.escape(invite_link, quote=True)
+
     info_page = epub.EpubHtml(title="Info", file_name="info.xhtml")
-    info_page.content = f"""
-    <h2>Generated from</h2>
-    <p style="text-align:center;">
-        <strong>{guild_name}</strong><br/>
-        <a href="{invite_link}">{invite_link}</a>
-    </p>
-
-    <hr/>
-
-    <h2>Writers</h2>
-    {writers_html}
-
-    <hr/>
-
-    <p><strong>Word Count:</strong> {rendered["word_count"]}</p>
-    <p><strong>Total Messages:</strong> {rendered["message_count"]}</p>
-    <p><strong>Timespan:</strong> {timespan}</p>
-    """
+    info_page.content = f"""<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<title>Info</title>
+<link href="style.css" rel="stylesheet" type="text/css"/>
+</head>
+<body>
+<h2>Generated from</h2>
+<p style="text-align:center;">
+<strong>{safe_guild}</strong><br/>
+<a href="{safe_invite}">{safe_invite}</a>
+</p>
+<hr/>
+<h2>Writers</h2>
+{writers_html}
+<hr/>
+<p><strong>Word Count:</strong> {rendered["word_count"]}</p>
+<p><strong>Total Messages:</strong> {rendered["message_count"]}</p>
+<p><strong>Timespan:</strong> {html.escape(timespan, quote=True)}</p>
+</body>
+</html>"""
     book.add_item(info_page)
 
     # Chapters
@@ -394,10 +478,19 @@ async def generate_epub(
     output_path = os.path.join(guild_folder, filename)
     epub.write_epub(output_path, book)
 
+    display_names_out = [
+        (
+            resolved_by_id[uid].display_name
+            if resolved_by_id.get(uid)
+            else rendered["writers"][uid]["display_name"]
+        )
+        for uid in writer_ids
+    ]
+
     return {
         "path": output_path,
         "word_count": rendered["word_count"],
         "message_count": rendered["message_count"],
-        "writers": [w["display_name"] for w in rendered["writers"].values()],
+        "writers": display_names_out,
         "chapter_count": len(rendered["chapters"]),
     }

@@ -38,10 +38,12 @@ Preserves the same behavior as copy for identity, attachments, and splitting. Re
 
 Administrator slash commands build an **EPUB** from a text channel’s history (non-empty messages; **webhook** messages are kept, ordinary **bot** messages are skipped):
 
-| Command | Purpose |
-|--------|---------|
-| `/generate_book` | “Clean” publication build (no per-post Discord links in the body) |
+
+| Command               | Purpose                                                           |
+| --------------------- | ----------------------------------------------------------------- |
+| `/generate_book`      | “Clean” publication build (no per-post Discord links in the body) |
 | `/generate_book_beta` | Same pipeline with **“To Post”** links after each paragraph block |
+
 
 Shared options:
 
@@ -51,28 +53,53 @@ Shared options:
 - **invite_link** — shown on the info page inside the book  
 - **cover_image** (optional) — cover for the EPUB  
 - **summary** (optional) — extra page at the end  
-- **chapter_file** (optional) — plain text file defining chapter breaks  
+- **chapter_file** (optional) — a `**.txt` file** you **upload** as the attachment for this option when you run the command
 
-**Chapter file format** (one chapter start per line):
+#### Chapter file (how it works)
+
+Use this when you want **named chapters** in the EPUB instead of one continuous run of posts.
+
+1. **Create a plain text file** (for example `chapters.txt`) on your computer.
+2. When you run `/generate_book` or `/generate_book_beta`, set **chapter_file** and **upload that `.txt` file** in Discord (same as attaching any file to a slash command option).
+3. The bot reads the file as **UTF-8** text, **one chapter boundary per non-empty line**.
+
+**Line format** (must match exactly — note the commas and straight double quotes around the title):
 
 ```text
 <message_id>,"Chapter title"
 ```
 
-Example:
+- `**message_id**` — the numeric **Discord message ID** (snowflake) of the post that should **start** that chapter. Each message in Discord has its **own** ID, so each new chapter uses a **different** ID: the ID of the **first message** that belongs to that chapter.  
+- `**"Chapter title"`** — the title shown in the EPUB for that chapter (in straight double quotes).
+
+**What the bot does with the file:** It loads the channel **oldest → newest** (same order as the story). It walks through messages in that order. Whenever it reaches a message whose ID appears in your file, it **starts a new chapter**: it inserts a chapter heading, uses the **title from that line**, and numbers chapters automatically (**Chapter 1**, **Chapter 2**, …). Content **before** the first listed ID stays in the opening section without a chapter title from the file. Content **after** each listed ID belongs to that chapter until the next listed ID (or the end of the channel).
+
+Example file with **two** chapter breaks (two different message IDs — one per chapter start):
 
 ```text
 1234567890123456789012,"Opening"
 9876543210987654321098,"The Road"
 ```
 
-`message_id` is the Discord snowflake of the message that should begin that chapter (the line from that message onward starts the new chapter until the next listed ID).
+#### How to get a message ID (chapter start)
 
-Generated files are written under `data/<guild_id>/` (existing `.epub` files in that folder are replaced when a new book is generated for the guild).
+You need the ID of the **exact message** where you want the chapter to begin.
+
+1. In Discord, open **User Settings** → **App Settings** → **Advanced**.
+2. Turn **Developer Mode** **on**.
+3. Go to the channel you are exporting, find the message that should **start** the chapter.
+4. **Right-click** that message (or use the message’s **⋯** menu) and choose **Copy Message ID**.
+5. Paste into your `.txt` file as the number before the comma on that chapter’s line.
+
+**Alternative:** **Copy Message Link**, then take the **last number** in the URL — that is the message ID (the URL looks like `https://discord.com/channels/<guild_id>/<channel_id>/<message_id>`).
+
+---
+
+Generated EPUB files are written under `data/<guild_id>/` (existing `.epub` files in that folder are replaced when a new book is generated for the guild).
 
 ### Database (SQLite)
 
-Configuration lives in **`data/bot.db`** (not JSON at runtime).
+Configuration lives in `**data/bot.db`** (not JSON at runtime).
 
 On first startup after upgrading from older JSON configs, files in:
 
@@ -94,15 +121,17 @@ Tables include **guilds** (error channel), **relays**, and **stats** (e.g. messa
 
 All slash commands below require **Administrator**.
 
-| Command | Description |
-|--------|-------------|
-| `/setup` | Initial setup: sets the **current channel** as the bot’s error/diagnostics channel (`/bot_info` posts its embed there). |
-| `/start_relay` | Start a relay: `source`, `target`, `delay_seconds`. Fails if a relay for that **source** already exists. |
-| `/stop_relay` | Stop the relay for a given **source** channel. |
-| `/instances` | List active relays (channel mentions). |
-| `/bot_info` | Send a diagnostic embed to the configured error channel (server, user, uptime, DB row counts, relay list). |
-| `/generate_book` | Build a clean EPUB from a source channel and upload it to a chosen channel. |
-| `/generate_book_beta` | Build a beta EPUB with per-post links to Discord. |
+
+| Command               | Description                                                                                                             |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `/setup`              | Initial setup: sets the **current channel** as the bot’s error/diagnostics channel (`/bot_info` posts its embed there). |
+| `/start_relay`        | Start a relay: `source`, `target`, `delay_seconds`. Fails if a relay for that **source** already exists.                |
+| `/stop_relay`         | Stop the relay for a given **source** channel.                                                                          |
+| `/instances`          | List active relays (channel mentions).                                                                                  |
+| `/bot_info`           | Send a diagnostic embed to the configured error channel (server, user, uptime, DB row counts, relay list).              |
+| `/generate_book`      | Build a clean EPUB from a source channel and upload it to a chosen channel.                                             |
+| `/generate_book_beta` | Build a beta EPUB with per-post links to Discord.                                                                       |
+
 
 Context menu commands (**Copy message**, **Cut everything from here**) also require **Administrator**.
 

@@ -63,7 +63,6 @@ def register(tree, client):
     """
 
     @tree.command(name="setup", description="Initial bot setup")
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_command(interaction: discord.Interaction):
         """
@@ -80,7 +79,6 @@ def register(tree, client):
         )
 
     @tree.command(name="start_relay", description="Start a live relay")
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def start_relay(
         interaction: discord.Interaction,
@@ -115,7 +113,6 @@ def register(tree, client):
         )
 
     @tree.command(name="stop_relay", description="Stop a relay")
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def stop_relay(interaction: discord.Interaction, source: discord.TextChannel):
         """
@@ -133,7 +130,6 @@ def register(tree, client):
         await interaction.response.send_message("Relay stopped.", ephemeral=True)
 
     @tree.command(name="instances", description="Show relays")
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def instances(interaction: discord.Interaction):
         """
@@ -161,7 +157,6 @@ def register(tree, client):
     @app_commands.describe(
         channel="Text/announcement channel or forum topic thread to observe",
     )
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def observe_command(
         interaction: discord.Interaction,
@@ -215,7 +210,6 @@ def register(tree, client):
     @app_commands.describe(
         channel="Channel or thread to remove from the observe list",
     )
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def unobserve_command(
         interaction: discord.Interaction,
@@ -247,7 +241,6 @@ def register(tree, client):
         name="observing",
         description="List channels the bot is currently observing for word stats",
     )
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def observing_command(interaction: discord.Interaction):
         ids = list_observed_channels(interaction.guild.id)
@@ -270,7 +263,6 @@ def register(tree, client):
         name="ranking",
         description="Post the observed-channel word leaderboard (everyone can see; admins only)",
     )
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def ranking_command(interaction: discord.Interaction):
         guild = interaction.guild
@@ -301,7 +293,6 @@ def register(tree, client):
             app_commands.Choice(name="Every 12 hours (+12h second post)", value=12),
         ]
     )
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def ranking_setup_command(
         interaction: discord.Interaction,
@@ -425,7 +416,6 @@ def register(tree, client):
         upload_channel="Channel or thread where the EPUB file is posted",
         invite_link="Optional: permanent invite URL on the EPUB info page; leave empty to omit",
     )
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def generate_book_beta(
         interaction: discord.Interaction,
@@ -506,7 +496,6 @@ def register(tree, client):
         upload_channel="Channel or thread where the EPUB file is posted",
         invite_link="Optional: permanent invite URL on the EPUB info page; leave empty to omit",
     )
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def generate_book(
         interaction: discord.Interaction,

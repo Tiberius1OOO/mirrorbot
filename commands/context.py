@@ -21,7 +21,6 @@ def register(tree, client):
     """
 
     @tree.context_menu(name="Copy message")
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def copy_message_context(
         interaction: discord.Interaction, message: discord.Message
@@ -36,7 +35,6 @@ def register(tree, client):
         )
 
     @tree.context_menu(name="Cut everything from here")
-    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def cut_from_here_context(
         interaction: discord.Interaction, message: discord.Message

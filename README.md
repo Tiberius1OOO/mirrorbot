@@ -147,7 +147,7 @@ On upgrade, `CREATE TABLE IF NOT EXISTS` runs automatically — your existing `b
 
 Most configuration commands require **Administrator**. **`/bot_info` is available to everyone** in the server.
 
-In supported Discord clients, commands that require **Administrator** are **hidden** from members who do not have that permission (the bot still checks permissions when a command runs). **`/bot_info`** stays visible to everyone.
+Administrator-only commands are **enforced in the bot** when someone runs them; members without **Administrator** get a permission error. They may still **see** those commands in the slash list unless you restrict them in Discord (**Server Settings → Integrations → your bot → manage**). **`/bot_info`** is meant for **everyone** — if normal members see **no** commands at all, check that integration (do not restrict all commands to admins only) and channel overrides for **Use Application Commands**.
 
 | Command | Who can use it | Description |
 |--------|----------------|-------------|
@@ -174,7 +174,7 @@ In supported Discord clients, commands that require **Administrator** are **hidd
 - **`/ranking`** (admin-only to run, **public** result) and optional **`/ranking_setup`** autoposts use the same leaderboard data as **`/bot_info`**.
 - If you used an **older** build that counted **relay sources** automatically, those totals may still be in the database; from now on, **only `/observe` channels** gain new words.
 
-Context menu commands (**Copy message**, **Cut everything from here**) require **Administrator** and use the same visibility rules as other admin commands.
+Context menu commands (**Copy message**, **Cut everything from here**) require **Administrator** to run (enforced by the bot).
 
 ---
 

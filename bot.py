@@ -95,7 +95,18 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-client = discord.Client(intents=intents)
+
+class DragonCopyClient(discord.Client):
+    """Client with ``start_time`` set in ``on_ready`` (used by /bot_info uptime)."""
+
+    start_time: float
+
+    def __init__(self, *, intents: discord.Intents) -> None:
+        super().__init__(intents=intents)
+        self.start_time = 0.0
+
+
+client = DragonCopyClient(intents=intents)
 tree = app_commands.CommandTree(client)
 
 # Register command modules
@@ -124,6 +135,8 @@ async def ranking_autopost_loop():
                 ch = await client.fetch_channel(row["channel_id"])
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 continue
+        if not isinstance(ch, (discord.TextChannel, discord.Thread)):
+            continue
         try:
             entries = get_top_relay_writers(row["guild_id"], 10)
             await post_ranking_to_channel(client, ch, guild, entries)

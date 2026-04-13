@@ -13,6 +13,7 @@ Primary responsibilities:
 import time
 from datetime import datetime
 from io import BytesIO
+from typing import Protocol
 
 import discord
 from discord import app_commands
@@ -59,7 +60,13 @@ def _parse_post_time_utc(s: str) -> tuple[int, int]:
     return h, m
 
 
-def register(tree, client):
+class _ClientWithStartTime(Protocol):
+    """Narrow client type for uptime without importing the concrete bot client."""
+
+    start_time: float
+
+
+def register(tree, client: _ClientWithStartTime):
     """
     Registers all slash commands with the command tree.
     """

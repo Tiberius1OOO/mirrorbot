@@ -39,6 +39,16 @@ for Discord’s API.
 """
 
 
+def count_words(content: str) -> int:
+    """
+    Counts whitespace-separated words in message text (same idea as EPUB export).
+    Empty or whitespace-only strings return 0.
+    """
+    if not content or not content.strip():
+        return 0
+    return len(content.strip().split())
+
+
 def split_message(content, limit=2000):
     """
     Splits a message into chunks that fit within

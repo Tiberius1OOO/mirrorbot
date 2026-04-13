@@ -1,10 +1,14 @@
 import json
 import os
 import sqlite3
+from typing import Optional
 
 # Database location
 DB_FOLDER = "data"
 DB_FILE = os.path.join(DB_FOLDER, "bot.db")
+
+# guild_id -> frozenset of observed channel/thread ids (invalidated on observe changes)
+_observed_channel_cache: dict[int, frozenset[int]] = {}
 
 # Old JSON config folder (for migration)
 CONFIG_FOLDER = "configs"
@@ -58,6 +62,33 @@ def init_db():
         )
         """)
 
+    # Per-user word totals from *observed* channels/threads (see /observe)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS relay_word_stats (
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            word_count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )
+        """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS observed_channels (
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, channel_id)
+        )
+        """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS channel_word_watermarks (
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            up_to_message_id INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, channel_id)
+        )
+        """)
+
     # Ensure uniqueness even on older databases
     cursor.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS
@@ -65,6 +96,111 @@ def init_db():
         ON relays (guild_id, source_channel)
         """)
 
+    conn.commit()
+    conn.close()
+
+    invalidate_observed_cache()
+
+
+# =========================================================
+# Observed channels (word tracking)
+# =========================================================
+
+
+def invalidate_observed_cache(guild_id: Optional[int] = None) -> None:
+    if guild_id is None:
+        _observed_channel_cache.clear()
+    else:
+        _observed_channel_cache.pop(guild_id, None)
+
+
+def get_observed_channel_ids(guild_id: int) -> frozenset[int]:
+    if guild_id not in _observed_channel_cache:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT channel_id FROM observed_channels WHERE guild_id = ?",
+            (guild_id,),
+        )
+        _observed_channel_cache[guild_id] = frozenset(
+            int(r["channel_id"]) for r in cursor.fetchall()
+        )
+        conn.close()
+    return _observed_channel_cache[guild_id]
+
+
+def is_channel_observed(guild_id: int, channel_id: int) -> bool:
+    return channel_id in get_observed_channel_ids(guild_id)
+
+
+def add_observed_channel(guild_id: int, channel_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT OR IGNORE INTO observed_channels (guild_id, channel_id)
+        VALUES (?, ?)
+        """,
+        (guild_id, channel_id),
+    )
+    conn.commit()
+    conn.close()
+    invalidate_observed_cache(guild_id)
+
+
+def remove_observed_channel(guild_id: int, channel_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM observed_channels WHERE guild_id = ? AND channel_id = ?",
+        (guild_id, channel_id),
+    )
+    conn.commit()
+    conn.close()
+    invalidate_observed_cache(guild_id)
+
+
+def list_observed_channels(guild_id: int) -> list[int]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT channel_id FROM observed_channels WHERE guild_id = ? ORDER BY channel_id",
+        (guild_id,),
+    )
+    ids = [int(r["channel_id"]) for r in cursor.fetchall()]
+    conn.close()
+    return ids
+
+
+def get_watermark(guild_id: int, channel_id: int) -> Optional[int]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT up_to_message_id FROM channel_word_watermarks
+        WHERE guild_id = ? AND channel_id = ?
+        """,
+        (guild_id, channel_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return int(row["up_to_message_id"])
+
+
+def set_watermark(guild_id: int, channel_id: int, up_to_message_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO channel_word_watermarks (guild_id, channel_id, up_to_message_id)
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id, channel_id)
+        DO UPDATE SET up_to_message_id = excluded.up_to_message_id
+        """,
+        (guild_id, channel_id, up_to_message_id),
+    )
     conn.commit()
     conn.close()
 
@@ -272,6 +408,145 @@ def remove_relay(guild_id: int, source: int):
 
     conn.commit()
     conn.close()
+
+
+def apply_user_word_deltas(guild_id: int, deltas: dict[int, int]) -> None:
+    """Apply many user word increments in one transaction."""
+    if not deltas:
+        return
+    conn = get_connection()
+    cursor = conn.cursor()
+    for user_id, words in deltas.items():
+        if words <= 0:
+            continue
+        cursor.execute(
+            """
+            INSERT INTO relay_word_stats (guild_id, user_id, word_count)
+            VALUES (?, ?, ?)
+            ON CONFLICT(guild_id, user_id)
+            DO UPDATE SET word_count = word_count + excluded.word_count
+            """,
+            (guild_id, user_id, words),
+        )
+    conn.commit()
+    conn.close()
+
+
+def increment_tracked_user_words(guild_id: int, user_id: int, words: int) -> None:
+    """Adds words for one user (live message in an observed channel)."""
+    if words <= 0:
+        return
+    apply_user_word_deltas(guild_id, {user_id: words})
+
+
+def get_total_tracked_words(guild_id: int) -> int:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT COALESCE(SUM(word_count), 0) AS t FROM relay_word_stats WHERE guild_id = ?",
+        (guild_id,),
+    )
+    total = int(cursor.fetchone()["t"])
+    conn.close()
+    return total
+
+
+def get_total_relay_source_words(guild_id: int) -> int:
+    """Backward-compatible alias for totals used in /bot_info."""
+    return get_total_tracked_words(guild_id)
+
+
+def get_tracked_writer_count(guild_id: int) -> int:
+    """Members with at least one counted word in observed channels."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS c FROM relay_word_stats
+        WHERE guild_id = ? AND word_count > 0
+        """,
+        (guild_id,),
+    )
+    c = int(cursor.fetchone()["c"])
+    conn.close()
+    return c
+
+
+def get_relay_writer_count(guild_id: int) -> int:
+    """Alias for older name."""
+    return get_tracked_writer_count(guild_id)
+
+
+def get_user_tracked_word_rank(
+    guild_id: int, user_id: int
+) -> tuple[int, Optional[int], int]:
+    """
+    Returns (words, rank, writers_with_words).
+    rank is 1-based; None if words == 0 (not on leaderboard).
+    writers_with_words counts users with word_count > 0.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS c FROM relay_word_stats
+        WHERE guild_id = ? AND word_count > 0
+        """,
+        (guild_id,),
+    )
+    writers_with_words = int(cursor.fetchone()["c"])
+
+    cursor.execute(
+        "SELECT word_count FROM relay_word_stats WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    )
+    row = cursor.fetchone()
+    words = int(row["word_count"]) if row else 0
+
+    if words <= 0:
+        conn.close()
+        return words, None, writers_with_words
+
+    cursor.execute(
+        """
+        SELECT COUNT(*) + 1 AS rnk FROM relay_word_stats
+        WHERE guild_id = ? AND word_count > ?
+        """,
+        (guild_id, words),
+    )
+    rank = int(cursor.fetchone()["rnk"])
+    conn.close()
+    return words, rank, writers_with_words
+
+
+def get_user_relay_word_rank(
+    guild_id: int, user_id: int
+) -> tuple[int, Optional[int], int]:
+    """Alias for /bot_info."""
+    return get_user_tracked_word_rank(guild_id, user_id)
+
+
+def get_top_tracked_writers(guild_id: int, limit: int = 10) -> list[tuple[int, int]]:
+    """List of (user_id, word_count) descending."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT user_id, word_count FROM relay_word_stats
+        WHERE guild_id = ? AND word_count > 0
+        ORDER BY word_count DESC, user_id ASC
+        LIMIT ?
+        """,
+        (guild_id, limit),
+    )
+    rows = [(int(r["user_id"]), int(r["word_count"])) for r in cursor.fetchall()]
+    conn.close()
+    return rows
+
+
+def get_top_relay_writers(guild_id: int, limit: int = 10) -> list[tuple[int, int]]:
+    return get_top_tracked_writers(guild_id, limit)
 
 
 def increment_message_counter(guild_id: int, amount: int = 1):

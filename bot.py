@@ -71,11 +71,13 @@ from discord import app_commands
 from commands import context, slash
 from helpers.database import (
     get_guild_config,
+    get_observed_channel_ids,
     increment_message_counter,
+    increment_tracked_user_words,
     init_db,
     migrate_from_json,
 )
-from helpers.text import split_message
+from helpers.text import count_words, split_message
 from helpers.webhooks import get_or_create_webhook
 
 TOKEN = os.getenv("DISCORD_TOKEN_MIRRORBOT")
@@ -100,11 +102,19 @@ async def on_message(message: discord.Message):
     Handles incoming messages and forwards them via relay
     if a matching relay configuration exists.
     """
-    if message.author.bot:
-        return
-
     guild = message.guild
     if not guild:
+        return
+
+    # Word stats: only for /observe channels (webhook posts count like EPUB export)
+    skip_for_word_stats = message.author.bot and not message.webhook_id
+    if not skip_for_word_stats:
+        if message.channel.id in get_observed_channel_ids(guild.id):
+            wc = count_words(message.content or "")
+            if wc:
+                increment_tracked_user_words(guild.id, message.author.id, wc)
+
+    if message.author.bot:
         return
 
     config = get_guild_config(guild.id)

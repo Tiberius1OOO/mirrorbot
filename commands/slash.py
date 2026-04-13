@@ -17,13 +17,27 @@ import discord
 from discord import app_commands
 
 from helpers.database import (
+    add_observed_channel,
     add_relay,
     get_connection,
     get_guild_config,
+    get_top_relay_writers,
+    get_total_relay_source_words,
+    get_user_relay_word_rank,
+    is_channel_observed,
+    list_observed_channels,
+    remove_observed_channel,
     remove_relay,
     set_error_channel,
 )
 from helpers.epub_generator import generate_epub, resolve_book_channel
+from helpers.observe_backfill import backfill_observed_channel
+
+
+def _truncate_field(text: str, limit: int = 1020) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 def register(tree, client):
@@ -118,6 +132,115 @@ def register(tree, client):
             lines.append(f"{source.mention} → {target.mention}")
 
         await interaction.response.send_message("\n".join(lines), ephemeral=True)
+
+    @tree.command(
+        name="observe",
+        description="Start tracking words in a channel (full history scan, then live)",
+    )
+    @app_commands.describe(
+        channel="Text/announcement channel or forum topic thread to observe",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def observe_command(
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | discord.Thread,
+    ):
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+        guild_id = guild.id
+
+        try:
+            ch = await resolve_book_channel(interaction.client, guild, channel)
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+            return
+
+        if is_channel_observed(guild_id, ch.id):
+            await interaction.followup.send(
+                f"Already observing {ch.mention}. Use `/unobserve` first to stop.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            scanned, deltas = await backfill_observed_channel(guild_id, ch)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "I need permission to read message history in that channel.",
+                ephemeral=True,
+            )
+            return
+        except Exception as e:
+            await interaction.followup.send(f"History scan failed: {e}", ephemeral=True)
+            return
+
+        add_observed_channel(guild_id, ch.id)
+        words_added = sum(deltas.values())
+        contributors = sum(1 for w in deltas.values() if w > 0)
+
+        await interaction.followup.send(
+            f"Now observing {ch.mention}.\n"
+            f"• **{scanned}** messages processed this scan\n"
+            f"• **{words_added:,}** words added from this scan, across **{contributors}** members\n"
+            f"New messages there will keep counting until `/unobserve`.",
+            ephemeral=True,
+        )
+
+    @tree.command(
+        name="unobserve",
+        description="Stop tracking words in a channel (keeps past totals & scan progress)",
+    )
+    @app_commands.describe(
+        channel="Channel or thread to remove from the observe list",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def unobserve_command(
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | discord.Thread,
+    ):
+        guild_id = interaction.guild.id
+        try:
+            ch = await resolve_book_channel(
+                interaction.client, interaction.guild, channel
+            )
+        except ValueError as e:
+            await interaction.response.send_message(str(e), ephemeral=True)
+            return
+
+        if not is_channel_observed(guild_id, ch.id):
+            await interaction.response.send_message(
+                f"Not observing {ch.mention}.", ephemeral=True
+            )
+            return
+
+        remove_observed_channel(guild_id, ch.id)
+        await interaction.response.send_message(
+            f"Stopped observing {ch.mention}. Word totals are unchanged; "
+            f"re-observing later only counts **new** messages since the last scan.",
+            ephemeral=True,
+        )
+
+    @tree.command(
+        name="observing",
+        description="List channels the bot is currently observing for word stats",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def observing_command(interaction: discord.Interaction):
+        ids = list_observed_channels(interaction.guild.id)
+        if not ids:
+            await interaction.response.send_message(
+                "No observed channels. Use `/observe` to add one.",
+                ephemeral=True,
+            )
+            return
+        lines = []
+        for cid in ids:
+            c = interaction.guild.get_channel(cid) or interaction.guild.get_thread(cid)
+            lines.append(c.mention if c else f"`{cid}` (not in cache — try ID)")
+        await interaction.response.send_message(
+            "**Observed channels:**\n" + "\n".join(lines),
+            ephemeral=True,
+        )
 
     @tree.command(
         name="generate_book_beta",
@@ -281,133 +404,215 @@ def register(tree, client):
 
     @tree.command(
         name="bot_info",
-        description="Show detailed bot diagnostic information",
+        description="Your word stats and rank — admins see full bot diagnostics",
     )
-    @app_commands.checks.has_permissions(administrator=True)
     async def bot_info(interaction: discord.Interaction):
         """
-        Sends a structured diagnostic report using an embed.
+        Everyone: personal card (avatar, join date, words in observed channels, rank).
+        Administrators: same plus diagnostics, relays, observed list, leaderboard.
         """
         guild = interaction.guild
-        guild_id = guild.id
-        user = interaction.user
-
-        config = get_guild_config(guild_id)
-        if not config:
+        if guild is None:
             await interaction.response.send_message(
-                "Setup not completed. Please run /setup first.",
+                "This command can only be used in a server.",
                 ephemeral=True,
             )
             return
 
-        # Uptime calculation
+        guild_id = guild.id
+        is_admin = interaction.user.guild_permissions.administrator
+
+        member = interaction.member
+        if member is None:
+            try:
+                member = await guild.fetch_member(interaction.user.id)
+            except discord.HTTPException:
+                member = interaction.user
+
+        if hasattr(member, "joined_at") and member.joined_at:
+            joined_str = member.joined_at.strftime("%Y-%m-%d %H:%M UTC")
+        else:
+            joined_str = "Unknown"
+
+        words, rank, writers_on_board = get_user_relay_word_rank(
+            guild_id, interaction.user.id
+        )
+        total_relay_words = get_total_relay_source_words(guild_id)
+
+        if rank is None:
+            rank_str = (
+                "— (an admin must `/observe` a channel you write in, then post there)"
+                if writers_on_board
+                else "— (no `/observe` channels yet — admins: use `/observe`)"
+            )
+        else:
+            rank_str = f"**#{rank}** of **{writers_on_board}** writers"
+
+        user_embed = discord.Embed(
+            title="DragonCopy — your stats",
+            description=(
+                "Counts only messages in **observed** channels/threads "
+                "(admins add them with `/observe`). Webhook posts count like story exports."
+            ),
+            color=discord.Color.teal(),
+            timestamp=datetime.utcnow(),
+        )
+        user_embed.set_thumbnail(url=interaction.user.display_avatar.url)
+        user_embed.set_author(
+            name=interaction.user.display_name,
+            icon_url=interaction.user.display_avatar.url,
+        )
+        user_embed.add_field(name="Joined server", value=joined_str, inline=True)
+        user_embed.add_field(
+            name="Your words (observed)",
+            value=f"**{words:,}**",
+            inline=True,
+        )
+        user_embed.add_field(name="Rank", value=rank_str, inline=True)
+        user_embed.add_field(
+            name="Server total (observed)",
+            value=f"**{total_relay_words:,}** words from all members",
+            inline=False,
+        )
+        user_embed.set_footer(
+            text="Ranking uses the same word counting as story EPUBs (split on whitespace)."
+        )
+
+        if not is_admin:
+            await interaction.response.send_message(embed=user_embed, ephemeral=True)
+            return
+
+        config = get_guild_config(guild_id)
+        if not config:
+            user_embed.add_field(
+                name="Administrator",
+                value="This server has not run `/setup` yet. Relay diagnostics are unavailable until then.",
+                inline=False,
+            )
+            await interaction.response.send_message(embed=user_embed, ephemeral=True)
+            return
+
         start_time = client.start_time
         uptime_seconds = int(time.time() - start_time)
         hours, remainder = divmod(uptime_seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
-
         uptime_str = f"{hours}h {minutes}m {seconds}s"
         start_time_str = datetime.fromtimestamp(start_time).strftime(
             "%Y-%m-%d %H:%M:%S"
         )
 
-        # Relay info
         relays = config.get("relays", [])
         relay_lines = []
         for r in relays:
             source = guild.get_channel(r["source"])
             target = guild.get_channel(r["target"])
+            src = source.mention if source else f"`{r['source']}`"
+            tgt = target.mention if target else f"`{r['target']}`"
+            relay_lines.append(f"• {src} → {tgt} — delay **{r['delay']}s**")
+        relay_text = (
+            "\n".join(relay_lines) if relay_lines else "*No relays — use `/start_relay`*"
+        )
 
-            source_name = source.name if source else f"Unknown({r['source']})"
-            target_name = target.name if target else f"Unknown({r['target']})"
+        top = get_top_relay_writers(guild_id, 10)
+        top_lines = []
+        for i, (uid, w) in enumerate(top, start=1):
+            m = guild.get_member(uid)
+            label = m.display_name if m else f"User `{uid}`"
+            top_lines.append(f"{i}. **{label}** — {w:,} words")
+        top_text = (
+            "\n".join(top_lines) if top_lines else "*No words recorded from observed channels yet.*"
+        )
 
-            relay_lines.append(f"{source_name} → {target_name} ({r['delay']}s)")
+        obs_ids = list_observed_channels(guild_id)
+        obs_lines = []
+        for oid in obs_ids:
+            oc = guild.get_channel(oid) or guild.get_thread(oid)
+            obs_lines.append(oc.mention if oc else f"`{oid}`")
+        obs_text = (
+            "\n".join(f"• {x}" for x in obs_lines)
+            if obs_lines
+            else "*None — use `/observe`*"
+        )
 
-        relay_text = "\n".join(relay_lines) if relay_lines else "No active relays"
-
-        # DB structure info
         conn = get_connection()
         cursor = conn.cursor()
-
         cursor.execute("SELECT COUNT(*) FROM guilds")
         guild_count = cursor.fetchone()[0]
-
         cursor.execute("SELECT COUNT(*) FROM relays")
         relay_count = cursor.fetchone()[0]
-
         cursor.execute("SELECT COUNT(*) FROM stats")
         stats_count = cursor.fetchone()[0]
-
         conn.close()
 
-        # Build embed
-        embed = discord.Embed(
-            title="DragonCopy Bot Status",
+        admin_embed = discord.Embed(
+            title="DragonCopy — administrator diagnostics",
             color=discord.Color.blurple(),
             timestamp=datetime.utcnow(),
         )
-
-        embed.add_field(
+        admin_embed.add_field(
             name="Server",
-            value=f"{guild.name}\nID: {guild_id}",
+            value=f"{guild.name}\nID: `{guild_id}`",
             inline=False,
         )
-
-        embed.add_field(
-            name="User",
-            value=f"{user} ({user.id})",
+        admin_embed.add_field(
+            name="Invoked by",
+            value=f"{interaction.user.mention}\n`{interaction.user.id}`",
             inline=True,
         )
-
-        embed.add_field(
+        admin_embed.add_field(
             name="Members",
             value=str(guild.member_count),
             inline=True,
         )
-
-        embed.add_field(
-            name="Tracked Channels",
-            value=str(len(relays)),
+        admin_embed.add_field(
+            name="Relay instances",
+            value=f"**{len(relays)}** active (source → target pairs)",
             inline=True,
         )
-
-        embed.add_field(
-            name="Bot Uptime",
-            value=f"Started: {start_time_str}\nUptime: {uptime_str}",
-            inline=False,
-        )
-
-        embed.add_field(
-            name="Database",
+        admin_embed.add_field(
+            name="Words (/observe channels)",
             value=(
-                f"Guild entries: {guild_count}\n"
-                f"Relay entries: {relay_count}\n"
-                f"Stats entries: {stats_count}"
+                f"**{total_relay_words:,}** total (all members)\n"
+                f"**{writers_on_board}** members on leaderboard"
             ),
             inline=False,
         )
-
-        embed.add_field(
-            name="Active Relays",
-            value=relay_text,
+        admin_embed.add_field(
+            name=f"Observed channels ({len(obs_ids)})",
+            value=_truncate_field(obs_text),
+            inline=False,
+        )
+        admin_embed.add_field(
+            name="Bot uptime",
+            value=f"Started: {start_time_str}\nUptime: {uptime_str}",
+            inline=False,
+        )
+        admin_embed.add_field(
+            name="Database",
+            value=(
+                f"Guild rows: {guild_count}\n"
+                f"Relay rows: {relay_count}\n"
+                f"Stats rows: {stats_count}"
+            ),
+            inline=True,
+        )
+        admin_embed.add_field(
+            name="Messages mirrored (counter)",
+            value=str(config["stats"].get("messages_copied", 0)),
+            inline=True,
+        )
+        admin_embed.add_field(
+            name="Active relays (channels)",
+            value=_truncate_field(relay_text),
+            inline=False,
+        )
+        admin_embed.add_field(
+            name="Top writers (observed)",
+            value=_truncate_field(top_text),
             inline=False,
         )
 
-        error_channel_id = config["error_channel"]
-        channel = guild.get_channel(error_channel_id)
-
-        if not channel:
-            await interaction.response.send_message(
-                "Error channel not found.",
-                ephemeral=True,
-            )
-            return
-
-        # Send embed to error channel
-        await channel.send(embed=embed)
-
-        # Confirm to the user
         await interaction.response.send_message(
-            "Bot info sent to error channel.",
+            embeds=[user_embed, admin_embed],
             ephemeral=True,
         )

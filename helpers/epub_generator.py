@@ -473,26 +473,23 @@ async def generate_epub(
         invite_html = f'<br/><a href="{safe_invite}">{safe_invite}</a>'
 
     info_page = epub.EpubHtml(title="Info", file_name="info.xhtml")
-    info_page.content = f"""<?xml version="1.0" encoding="utf-8"?>
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-<title>Info</title>
-<link href="style.css" rel="stylesheet" type="text/css"/>
-</head>
-<body>
-<h2>Generated from</h2>
-<p style="text-align:center;">
-<strong>{safe_guild}</strong>{invite_html}
-</p>
-<hr/>
-<h2>Writers</h2>
-{writers_html}
-<hr/>
-<p><strong>Word Count:</strong> {rendered["word_count"]}</p>
-<p><strong>Total Messages:</strong> {rendered["message_count"]}</p>
-<p><strong>Timespan:</strong> {html.escape(timespan, quote=True)}</p>
-</body>
-</html>"""
+    info_page.content = f"""
+    <h2>Generated from</h2>
+    <p style="text-align:center;">
+        <strong>{safe_guild}</strong>{invite_html}
+    </p>
+
+    <hr/>
+
+    <h2>Writers</h2>
+    {writers_html}
+
+    <hr/>
+
+    <p><strong>Word Count:</strong> {rendered["word_count"]}</p>
+    <p><strong>Total Messages:</strong> {rendered["message_count"]}</p>
+    <p><strong>Timespan:</strong> {html.escape(timespan, quote=True)}</p>
+    """
     book.add_item(info_page)
 
     # Chapters

@@ -130,27 +130,39 @@ are migrated and renamed to:
 <guild_id>.migrated.json
 ```
 
-Tables include **guilds** (error channel), **relays**, and **stats** (e.g. messages copied count).
+Tables include **guilds** (error channel), **relays**, **stats** (messages mirrored counter), **relay_word_stats** (per-member word totals from **observed** channels), **observed_channels** (which channels/threads count toward stats), and **channel_word_watermarks** (so re-adding `/observe` after `/unobserve` only scans **new** history and does not double-count old messages).
+
+On upgrade, `CREATE TABLE IF NOT EXISTS` runs automatically — your existing `bot.db` is extended in place; no manual migration file is required.
 
 ---
 
 ## Commands
 
-All slash commands below require **Administrator**.
+Most configuration commands require **Administrator**. **`/bot_info` is available to everyone** in the server.
 
+| Command | Who can use it | Description |
+|--------|----------------|-------------|
+| `/setup` | Administrator | Sets the **current channel** as the bot’s error/diagnostics channel (legacy logging; not required for `/bot_info`). |
+| `/start_relay` | Administrator | Start a relay: `source`, `target`, `delay_seconds`. Fails if a relay for that **source** already exists. |
+| `/stop_relay` | Administrator | Stop the relay for a given **source** channel. |
+| `/instances` | Administrator | List active relays (channel mentions). |
+| `/observe` | Administrator | Pick a **text** channel, **announcement** channel, or **forum topic thread**. The bot **scans full message history** once (initial word counts), then **keeps counting** new messages until `/unobserve`. Nothing is tracked until an admin runs this. |
+| `/unobserve` | Administrator | Stop counting in that channel/thread. **Totals stay**; a **watermark** remembers how far history was scanned so `/observe` again only adds **new** messages. |
+| `/observing` | Administrator | List all channels/threads currently observed. |
+| `/bot_info` | **Everyone** | **Personal card:** avatar, join date, **words** from **observed** channels, **rank**, server total. **Administrators** also get diagnostics: relays, **observed list**, leaderboard, etc. **Ephemeral**. |
+| `/generate_book` | Administrator | Build a clean EPUB from a source channel and upload it to a chosen channel. |
+| `/generate_book_beta` | Administrator | Build a beta EPUB with per-post links to Discord. |
 
-| Command               | Description                                                                                                             |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `/setup`              | Initial setup: sets the **current channel** as the bot’s error/diagnostics channel (`/bot_info` posts its embed there). |
-| `/start_relay`        | Start a relay: `source`, `target`, `delay_seconds`. Fails if a relay for that **source** already exists.                |
-| `/stop_relay`         | Stop the relay for a given **source** channel.                                                                          |
-| `/instances`          | List active relays (channel mentions).                                                                                  |
-| `/bot_info`           | Send a diagnostic embed to the configured error channel (server, user, uptime, DB row counts, relay list).              |
-| `/generate_book`      | Build a clean EPUB from a source channel and upload it to a chosen channel.                                             |
-| `/generate_book_beta` | Build a beta EPUB with per-post links to Discord.                                                                       |
+### Word tracking and ranking (`/observe`)
 
+- **Relays do not affect stats.** Only channels (or forum topics) an admin adds with **`/observe`** are counted.
+- On **`/observe`**, the bot runs an **initial history scan** (same rules as EPUBs: normal **bot** posts are skipped, **webhook** posts count), then **live** messages in that channel add words until **`/unobserve`**.
+- **Re-observing** after **`/unobserve`** only processes messages **after** the saved watermark, so old text is **not** double-counted.
+- Counts use whitespace-split words (like EPUB export). Only traffic **while the bot is running** is counted for live messages; the backlog scan runs at `/observe` time.
+- Rankings are per-server. If nobody has used **`/observe`** yet, there is no leaderboard.
+- If you used an **older** build that counted **relay sources** automatically, those totals may still be in the database; from now on, **only `/observe` channels** gain new words.
 
-Context menu commands (**Copy message**, **Cut everything from here**) also require **Administrator**.
+Context menu commands (**Copy message**, **Cut everything from here**) require **Administrator**.
 
 ---
 

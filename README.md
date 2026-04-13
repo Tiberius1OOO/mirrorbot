@@ -41,6 +41,10 @@ Preserves the same behavior as copy for identity, attachments, and splitting. Re
 - **`/ranking`** (admin-only to invoke) posts a **public** top-**10** leaderboard in the channel: **1–5** with avatars, **6–10** as names and word counts.
 - **`/ranking_setup`** (admin, ephemeral) can turn on **scheduled** posts of that leaderboard to a chosen channel, on a **12** or **24** hour UTC schedule.
 
+### Plain text export (`/export_flowtext`)
+
+Administrator slash command: reads the same **source** channel types as EPUB (**text**, **announcement**, or **thread** / forum topic — not the forum listing). It collects **only message bodies** (oldest → newest), **no** author names, avatars, or timestamps. Empty messages are skipped; **webhook** posts are kept, ordinary **bot** posts skipped (same rules as EPUB). Messages are separated by a **blank line** in the `.txt`. The file is posted to **upload_channel** as a Discord attachment (UTF-8). Optional **filename_base** sets the download name without `.txt` (default: sanitized source channel name).
+
 ### EPUB export (books)
 
 Administrator slash commands build an **EPUB** from message history (non-empty messages; **webhook** messages are kept, ordinary **bot** messages are skipped).
@@ -163,6 +167,7 @@ Administrator-only commands are **enforced in the bot** when someone runs them; 
 | `/bot_info` | **Everyone** | **Personal card:** avatar, join date, **words** from **observed** channels, **rank**, server total. **Administrators** also get diagnostics: relays, **observed list**, leaderboard, etc. **Ephemeral**. |
 | `/generate_book` | Administrator | Build a clean EPUB from a source channel and upload it to a chosen channel. |
 | `/generate_book_beta` | Administrator | Build a beta EPUB with per-post links to Discord. |
+| `/export_flowtext` | Administrator | Export **plain text only** from a source channel/thread to a `.txt` file in **upload_channel** (same channel rules as EPUB; no usernames in the file). Optional **filename_base**. |
 
 ### Word tracking and ranking (`/observe`)
 
@@ -263,6 +268,7 @@ Enable **Server Members Intent** and **Message Content Intent** in the Discord D
 - Large cut or relay bursts may be slow due to **rate limits**.
 - **Delayed relay** messages that have not been sent yet are **lost** if the bot restarts during the wait.
 - Each **source** channel can only have **one** active relay at a time. To change target or delay for that source, run `/stop_relay` on the source first, then `/start_relay` again.
+- Very large text exports may hit Discord’s **attachment size** limit (typically **25 MB** for bots); EPUB generation writes to disk under `data/<guild_id>/` instead.
 
 ---
 

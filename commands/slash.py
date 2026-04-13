@@ -12,6 +12,7 @@ Primary responsibilities:
 
 import time
 from datetime import datetime
+from io import BytesIO
 
 import discord
 from discord import app_commands
@@ -34,6 +35,7 @@ from helpers.database import (
     set_error_channel,
 )
 from helpers.epub_generator import generate_epub, resolve_book_channel
+from helpers.flowtext_export import build_flowtext_export, safe_txt_filename
 from helpers.observe_backfill import backfill_observed_channel
 from helpers.ranking_display import build_ranking_embeds
 
@@ -564,6 +566,67 @@ def register(tree, client):
         except Exception as e:
             await interaction.followup.send(
                 f"Error generating book: {e}",
+                ephemeral=True,
+            )
+
+    @tree.command(
+        name="export_flowtext",
+        description="Export channel/thread message text to a plain .txt file (no names, no avatars)",
+    )
+    @app_commands.describe(
+        source_channel="Text/announcement channel or a thread (e.g. forum topic) to read",
+        upload_channel="Channel or thread where the .txt file is posted",
+        filename_base="Optional file name without .txt (default: derived from source channel)",
+    )
+    @app_commands.checks.has_permissions(administrator=True)
+    async def export_flowtext(
+        interaction: discord.Interaction,
+        source_channel: discord.TextChannel | discord.Thread,
+        upload_channel: discord.TextChannel | discord.Thread,
+        filename_base: str = "",
+    ):
+        await interaction.response.defer(thinking=True)
+
+        try:
+            source = await resolve_book_channel(
+                interaction.client, interaction.guild, source_channel
+            )
+            upload = await resolve_book_channel(
+                interaction.client, interaction.guild, upload_channel
+            )
+        except ValueError as e:
+            await interaction.followup.send(str(e), ephemeral=True)
+            return
+
+        try:
+            text, msg_count = await build_flowtext_export(source)
+            base = safe_txt_filename(filename_base.strip() or source.name)
+            fname = f"{base}.txt"
+            data = text.encode("utf-8")
+
+            await upload.send(
+                content=(
+                    f"**Plain text export**\n"
+                    f"**Source:** {source.mention}\n"
+                    f"**Requested by:** {interaction.user.mention}\n"
+                    f"**Messages included:** {msg_count}\n"
+                    f"**Size:** {len(data):,} bytes (UTF-8)"
+                ),
+                file=discord.File(BytesIO(data), filename=fname),
+            )
+
+            await interaction.followup.send(
+                f"Exported **{msg_count}** message(s) to {upload.mention} as `{fname}`.",
+                ephemeral=True,
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Missing permission to read that source or post in the upload channel.",
+                ephemeral=True,
+            )
+        except Exception as e:
+            await interaction.followup.send(
+                f"Error exporting flowtext: {e}",
                 ephemeral=True,
             )
 

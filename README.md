@@ -215,7 +215,7 @@ python -m venv venv
 pip install -r requirements.txt
 ```
 
-If you skip this and later **merge or pull** a version that added packages (for example EPUB support), starting `**python bot.py`** will detect missing imports and run `**pip install -r requirements.txt`** automatically once (requires network access). If that fails, run the command above manually in the same environment you use to run the bot.
+If you skip this and later **merge or pull** a version that added packages (for example EPUB support), running `python bot.py` will detect missing imports and run `pip install -r requirements.txt` automatically once (requires network access). If that fails, run the command above manually in the same environment you use to run the bot.
 
 ### Set the bot token
 
@@ -250,6 +250,8 @@ The bot needs, at minimum:
 - Read Message History  
 - Attach Files  
 - **Manage Messages** (required for cut/delete operations)
+
+**Channel permissions for members:** anyone who should type slash commands (e.g. `/bot_info`) needs **Use Application Commands** allowed in that channel (or inherited from the category). Denying it hides app commands there.
 
 Enable **Server Members Intent** and **Message Content Intent** in the Discord Developer Portal if your bot should see member display names reliably and read message text for relays and EPUB generation.
 

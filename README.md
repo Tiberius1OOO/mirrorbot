@@ -34,6 +34,13 @@ The bot will:
 
 Preserves the same behavior as copy for identity, attachments, and splitting. Requires **Manage Messages** in the source channel for deletes to succeed.
 
+### Observed-channel word stats and leaderboard
+
+- Admins add channels or forum topics with **`/observe`**; the bot counts words there (relays do **not** change these totals).
+- **`/bot_info`** shows each member their own stats (everyone) and extra diagnostics for admins.
+- **`/ranking`** (admin-only to invoke) posts a **public** top-**10** leaderboard in the channel: **1–5** with avatars, **6–10** as names and word counts.
+- **`/ranking_setup`** (admin, ephemeral) can turn on **scheduled** posts of that leaderboard to a chosen channel, on a **12** or **24** hour UTC schedule.
+
 ### EPUB export (books)
 
 Administrator slash commands build an **EPUB** from message history (non-empty messages; **webhook** messages are kept, ordinary **bot** messages are skipped).
@@ -130,7 +137,7 @@ are migrated and renamed to:
 <guild_id>.migrated.json
 ```
 
-Tables include **guilds** (error channel), **relays**, **stats** (messages mirrored counter), **relay_word_stats** (per-member word totals from **observed** channels), **observed_channels** (which channels/threads count toward stats), and **channel_word_watermarks** (so re-adding `/observe` after `/unobserve` only scans **new** history and does not double-count old messages).
+Tables include **guilds** (error channel), **relays**, **stats** (messages mirrored counter), **relay_word_stats** (per-member word totals from **observed** channels), **observed_channels** (which channels/threads count toward stats), **channel_word_watermarks** (so re-adding `/observe` after `/unobserve` only scans **new** history and does not double-count old messages), and **ranking_autopost** (optional schedule for automatic `/ranking`-style posts in a channel).
 
 On upgrade, `CREATE TABLE IF NOT EXISTS` runs automatically — your existing `bot.db` is extended in place; no manual migration file is required.
 
@@ -139,6 +146,8 @@ On upgrade, `CREATE TABLE IF NOT EXISTS` runs automatically — your existing `b
 ## Commands
 
 Most configuration commands require **Administrator**. **`/bot_info` is available to everyone** in the server.
+
+In supported Discord clients, commands that require **Administrator** are **hidden** from members who do not have that permission (the bot still checks permissions when a command runs). **`/bot_info`** stays visible to everyone.
 
 | Command | Who can use it | Description |
 |--------|----------------|-------------|
@@ -149,6 +158,8 @@ Most configuration commands require **Administrator**. **`/bot_info` is availabl
 | `/observe` | Administrator | Pick a **text** channel, **announcement** channel, or **forum topic thread**. The bot **scans full message history** once (initial word counts), then **keeps counting** new messages until `/unobserve`. Nothing is tracked until an admin runs this. |
 | `/unobserve` | Administrator | Stop counting in that channel/thread. **Totals stay**; a **watermark** remembers how far history was scanned so `/observe` again only adds **new** messages. |
 | `/observing` | Administrator | List all channels/threads currently observed. |
+| `/ranking` | Administrator | Posts the **top 10** writers by observed-channel word count **in the channel** (public message): ranks **1–5** use avatars; **6–10** are names and counts only. |
+| `/ranking_setup` | Administrator | Configure **automatic** ranking posts (reply is **ephemeral**): target channel/thread, **12** or **24** hour cadence, first post time **`HH:MM` in UTC**, or disable autopost. Discord has no per-server timezone — convert local time to UTC. **12h** posts at that UTC time and again 12 hours later; **24h** once per day at that clock time. |
 | `/bot_info` | **Everyone** | **Personal card:** avatar, join date, **words** from **observed** channels, **rank**, server total. **Administrators** also get diagnostics: relays, **observed list**, leaderboard, etc. **Ephemeral**. |
 | `/generate_book` | Administrator | Build a clean EPUB from a source channel and upload it to a chosen channel. |
 | `/generate_book_beta` | Administrator | Build a beta EPUB with per-post links to Discord. |
@@ -160,9 +171,10 @@ Most configuration commands require **Administrator**. **`/bot_info` is availabl
 - **Re-observing** after **`/unobserve`** only processes messages **after** the saved watermark, so old text is **not** double-counted.
 - Counts use whitespace-split words (like EPUB export). Only traffic **while the bot is running** is counted for live messages; the backlog scan runs at `/observe` time.
 - Rankings are per-server. If nobody has used **`/observe`** yet, there is no leaderboard.
+- **`/ranking`** (admin-only to run, **public** result) and optional **`/ranking_setup`** autoposts use the same leaderboard data as **`/bot_info`**.
 - If you used an **older** build that counted **relay sources** automatically, those totals may still be in the database; from now on, **only `/observe` channels** gain new words.
 
-Context menu commands (**Copy message**, **Cut everything from here**) require **Administrator**.
+Context menu commands (**Copy message**, **Cut everything from here**) require **Administrator** and use the same visibility rules as other admin commands.
 
 ---
 

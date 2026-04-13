@@ -89,6 +89,21 @@ def init_db():
         )
         """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ranking_autopost (
+            guild_id INTEGER PRIMARY KEY,
+            channel_id INTEGER,
+            interval_hours INTEGER NOT NULL DEFAULT 24
+                CHECK (interval_hours IN (12, 24)),
+            post_hour_utc INTEGER NOT NULL DEFAULT 12
+                CHECK (post_hour_utc BETWEEN 0 AND 23),
+            post_minute_utc INTEGER NOT NULL DEFAULT 0
+                CHECK (post_minute_utc BETWEEN 0 AND 59),
+            last_fired_slot TEXT NOT NULL DEFAULT '',
+            enabled INTEGER NOT NULL DEFAULT 0
+        )
+        """)
+
     # Ensure uniqueness even on older databases
     cursor.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS
@@ -568,3 +583,132 @@ def increment_message_counter(guild_id: int, amount: int = 1):
 
     conn.commit()
     conn.close()
+
+
+# =========================================================
+# Ranking autopost (/ranking_setup)
+# =========================================================
+
+
+def get_ranking_autopost(guild_id: int) -> Optional[dict]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT guild_id, channel_id, interval_hours, post_hour_utc,
+               post_minute_utc, last_fired_slot, enabled
+        FROM ranking_autopost WHERE guild_id = ?
+        """,
+        (guild_id,),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "guild_id": int(row["guild_id"]),
+        "channel_id": int(row["channel_id"]) if row["channel_id"] is not None else None,
+        "interval_hours": int(row["interval_hours"]),
+        "post_hour_utc": int(row["post_hour_utc"]),
+        "post_minute_utc": int(row["post_minute_utc"]),
+        "last_fired_slot": str(row["last_fired_slot"] or ""),
+        "enabled": bool(row["enabled"]),
+    }
+
+
+def save_ranking_autopost(
+    guild_id: int,
+    channel_id: int,
+    interval_hours: int,
+    post_hour_utc: int,
+    post_minute_utc: int,
+    enabled: bool = True,
+) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO ranking_autopost (
+            guild_id, channel_id, interval_hours,
+            post_hour_utc, post_minute_utc, last_fired_slot, enabled
+        )
+        VALUES (?, ?, ?, ?, ?, '', ?)
+        ON CONFLICT(guild_id) DO UPDATE SET
+            channel_id = excluded.channel_id,
+            interval_hours = excluded.interval_hours,
+            post_hour_utc = excluded.post_hour_utc,
+            post_minute_utc = excluded.post_minute_utc,
+            enabled = excluded.enabled,
+            last_fired_slot = ''
+        """,
+        (
+            guild_id,
+            channel_id,
+            interval_hours,
+            post_hour_utc,
+            post_minute_utc,
+            1 if enabled else 0,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def disable_ranking_autopost(guild_id: int) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO ranking_autopost (
+            guild_id, channel_id, interval_hours,
+            post_hour_utc, post_minute_utc, last_fired_slot, enabled
+        )
+        VALUES (?, NULL, 24, 12, 0, '', 0)
+        ON CONFLICT(guild_id) DO UPDATE SET enabled = 0
+        """,
+        (guild_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def set_ranking_last_fired_slot(guild_id: int, slot_key: str) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE ranking_autopost SET last_fired_slot = ?
+        WHERE guild_id = ?
+        """,
+        (slot_key, guild_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def iter_active_ranking_autopost() -> list[dict]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT guild_id, channel_id, interval_hours, post_hour_utc,
+               post_minute_utc, last_fired_slot, enabled
+        FROM ranking_autopost
+        WHERE enabled = 1 AND channel_id IS NOT NULL
+        """
+    )
+    rows = []
+    for row in cursor.fetchall():
+        rows.append(
+            {
+                "guild_id": int(row["guild_id"]),
+                "channel_id": int(row["channel_id"]),
+                "interval_hours": int(row["interval_hours"]),
+                "post_hour_utc": int(row["post_hour_utc"]),
+                "post_minute_utc": int(row["post_minute_utc"]),
+                "last_fired_slot": str(row["last_fired_slot"] or ""),
+                "enabled": bool(row["enabled"]),
+            }
+        )
+    conn.close()
+    return rows

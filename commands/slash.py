@@ -19,8 +19,10 @@ from discord import app_commands
 from helpers.database import (
     add_observed_channel,
     add_relay,
+    disable_ranking_autopost,
     get_connection,
     get_guild_config,
+    get_ranking_autopost,
     get_top_relay_writers,
     get_total_relay_source_words,
     get_user_relay_word_rank,
@@ -28,10 +30,12 @@ from helpers.database import (
     list_observed_channels,
     remove_observed_channel,
     remove_relay,
+    save_ranking_autopost,
     set_error_channel,
 )
 from helpers.epub_generator import generate_epub, resolve_book_channel
 from helpers.observe_backfill import backfill_observed_channel
+from helpers.ranking_display import build_ranking_embeds
 
 
 def _truncate_field(text: str, limit: int = 1020) -> str:
@@ -40,12 +44,26 @@ def _truncate_field(text: str, limit: int = 1020) -> str:
     return text[: limit - 3] + "..."
 
 
+def _parse_post_time_utc(s: str) -> tuple[int, int]:
+    s = s.strip()
+    if not s:
+        raise ValueError("Time is empty.")
+    parts = s.split(":")
+    if len(parts) != 2:
+        raise ValueError("Use **HH:MM** in 24-hour **UTC**, e.g. `14:30`.")
+    h, m = int(parts[0]), int(parts[1])
+    if h < 0 or h > 23 or m < 0 or m > 59:
+        raise ValueError("Hour must be 0–23 and minute 0–59.")
+    return h, m
+
+
 def register(tree, client):
     """
     Registers all slash commands with the command tree.
     """
 
     @tree.command(name="setup", description="Initial bot setup")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_command(interaction: discord.Interaction):
         """
@@ -62,6 +80,7 @@ def register(tree, client):
         )
 
     @tree.command(name="start_relay", description="Start a live relay")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def start_relay(
         interaction: discord.Interaction,
@@ -96,6 +115,7 @@ def register(tree, client):
         )
 
     @tree.command(name="stop_relay", description="Stop a relay")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def stop_relay(interaction: discord.Interaction, source: discord.TextChannel):
         """
@@ -113,6 +133,7 @@ def register(tree, client):
         await interaction.response.send_message("Relay stopped.", ephemeral=True)
 
     @tree.command(name="instances", description="Show relays")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def instances(interaction: discord.Interaction):
         """
@@ -140,6 +161,7 @@ def register(tree, client):
     @app_commands.describe(
         channel="Text/announcement channel or forum topic thread to observe",
     )
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def observe_command(
         interaction: discord.Interaction,
@@ -193,6 +215,7 @@ def register(tree, client):
     @app_commands.describe(
         channel="Channel or thread to remove from the observe list",
     )
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def unobserve_command(
         interaction: discord.Interaction,
@@ -224,6 +247,7 @@ def register(tree, client):
         name="observing",
         description="List channels the bot is currently observing for word stats",
     )
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def observing_command(interaction: discord.Interaction):
         ids = list_observed_channels(interaction.guild.id)
@@ -243,6 +267,156 @@ def register(tree, client):
         )
 
     @tree.command(
+        name="ranking",
+        description="Post the observed-channel word leaderboard (everyone can see; admins only)",
+    )
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    async def ranking_command(interaction: discord.Interaction):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "Use this command in a server.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=False)
+        top = get_top_relay_writers(guild.id, 10)
+        embeds = await build_ranking_embeds(interaction.client, guild, top)
+        await interaction.followup.send(embeds=embeds)
+
+    @tree.command(
+        name="ranking_setup",
+        description="Configure automatic ranking posts (admin only, ephemeral)",
+    )
+    @app_commands.describe(
+        channel="Channel or thread where scheduled rankings are posted",
+        interval_hours="12h = twice daily at this UTC minute; 24h = once per day",
+        post_time_utc="First post time in 24-hour UTC (HH:MM), e.g. 12:00",
+        disable_automatic_posts="Stop automatic ranking posts for this server",
+    )
+    @app_commands.choices(
+        interval_hours=[
+            app_commands.Choice(name="Every 24 hours", value=24),
+            app_commands.Choice(name="Every 12 hours (+12h second post)", value=12),
+        ]
+    )
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    async def ranking_setup_command(
+        interaction: discord.Interaction,
+        channel: discord.TextChannel | discord.Thread | None = None,
+        interval_hours: int | None = None,
+        post_time_utc: str | None = None,
+        disable_automatic_posts: bool = False,
+    ):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "Use this command in a server.", ephemeral=True
+            )
+            return
+
+        guild_id = guild.id
+
+        if disable_automatic_posts:
+            disable_ranking_autopost(guild_id)
+            await interaction.response.send_message(
+                "Automatic ranking posts are **off** for this server. "
+                "Admins can still run `/ranking` manually.",
+                ephemeral=True,
+            )
+            return
+
+        row = get_ranking_autopost(guild_id)
+
+        if channel is None and interval_hours is None and post_time_utc is None:
+            if not row:
+                await interaction.response.send_message(
+                    "**Ranking autopost** — not configured yet.\n\n"
+                    "Discord does not offer a drag-and-drop panel for bots; use the options "
+                    "on this command: set **channel**, **interval_hours**, and "
+                    "**post_time_utc** (all **UTC**).\n"
+                    "• **24 hours** — one post per day at that clock time.\n"
+                    "• **12 hours** — same time and 12 hours later (two posts per day).\n"
+                    "Check **disable_automatic_posts** to turn scheduling off.",
+                    ephemeral=True,
+                )
+                return
+            ch = guild.get_channel_or_thread(row["channel_id"]) if row["channel_id"] else None
+            ch_label = ch.mention if ch else f"`{row['channel_id']}`"
+            state = "on" if row["enabled"] else "off"
+            await interaction.response.send_message(
+                "**Current ranking autopost**\n"
+                f"• Status: **{state}**\n"
+                f"• Channel: {ch_label}\n"
+                f"• Interval: **{row['interval_hours']}** hours\n"
+                f"• Post time (UTC): **{row['post_hour_utc']:02d}:{row['post_minute_utc']:02d}**\n\n"
+                "Change any field by filling the options again (partial updates are OK). "
+                "Times are **UTC** — Discord has no server timezone.",
+                ephemeral=True,
+            )
+            return
+
+        resolved_channel = None
+        if channel is not None:
+            try:
+                resolved_channel = await resolve_book_channel(
+                    interaction.client, guild, channel
+                )
+            except ValueError as e:
+                await interaction.response.send_message(str(e), ephemeral=True)
+                return
+
+        ch_id = resolved_channel.id if resolved_channel else None
+        if ch_id is None and row and row["channel_id"]:
+            ch_id = row["channel_id"]
+
+        iv = interval_hours if interval_hours is not None else None
+        if iv is None and row:
+            iv = row["interval_hours"]
+
+        ph: int | None = None
+        pm: int | None = None
+        if post_time_utc is not None:
+            try:
+                ph, pm = _parse_post_time_utc(post_time_utc)
+            except ValueError as e:
+                await interaction.response.send_message(str(e), ephemeral=True)
+                return
+        elif row:
+            ph, pm = row["post_hour_utc"], row["post_minute_utc"]
+
+        if ch_id is None or iv is None or ph is None or pm is None:
+            await interaction.response.send_message(
+                "To **turn on** autopost, this server needs a **channel**, "
+                "**interval_hours**, and **post_time_utc** (you can set missing pieces "
+                "in separate invocations once a row exists — run with no options to see "
+                "what is saved).",
+                ephemeral=True,
+            )
+            return
+
+        save_ranking_autopost(
+            guild_id,
+            ch_id,
+            iv,
+            ph,
+            pm,
+            enabled=True,
+        )
+        ch2 = guild.get_channel_or_thread(ch_id)
+        ch_label = ch2.mention if ch2 else f"<#{ch_id}>"
+        await interaction.response.send_message(
+            "**Ranking autopost saved** (UTC).\n"
+            f"• Posts in {ch_label}\n"
+            f"• Every **{iv}** hours, starting from **{ph:02d}:{pm:02d}** UTC\n\n"
+            "Admins can still post anytime with `/ranking` (public). "
+            "Use **disable_automatic_posts** to stop the schedule.",
+            ephemeral=True,
+        )
+
+    @tree.command(
         name="generate_book_beta",
         description="Generate a Beta EPUB (with post links)",
     )
@@ -251,6 +425,7 @@ def register(tree, client):
         upload_channel="Channel or thread where the EPUB file is posted",
         invite_link="Optional: permanent invite URL on the EPUB info page; leave empty to omit",
     )
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def generate_book_beta(
         interaction: discord.Interaction,
@@ -331,6 +506,7 @@ def register(tree, client):
         upload_channel="Channel or thread where the EPUB file is posted",
         invite_link="Optional: permanent invite URL on the EPUB info page; leave empty to omit",
     )
+    @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def generate_book(
         interaction: discord.Interaction,

@@ -64,19 +64,26 @@ _ensure_dependencies()
 import asyncio
 import os
 import time
+from datetime import datetime, timezone
 
 import discord
 from discord import app_commands
+from discord.ext import tasks
 
 from commands import context, slash
 from helpers.database import (
     get_guild_config,
     get_observed_channel_ids,
+    get_top_relay_writers,
     increment_message_counter,
     increment_tracked_user_words,
     init_db,
+    iter_active_ranking_autopost,
     migrate_from_json,
+    set_ranking_last_fired_slot,
 )
+from helpers.ranking_autopost import ranking_should_fire, ranking_slot_key_utc
+from helpers.ranking_display import post_ranking_to_channel
 from helpers.text import count_words, split_message
 from helpers.webhooks import get_or_create_webhook
 
@@ -94,6 +101,41 @@ tree = app_commands.CommandTree(client)
 # Register command modules
 slash.register(tree, client)
 context.register(tree, client)
+
+
+@tasks.loop(minutes=1.0)
+async def ranking_autopost_loop():
+    now = datetime.now(timezone.utc)
+    for row in iter_active_ranking_autopost():
+        if not ranking_should_fire(
+            row["interval_hours"],
+            row["post_hour_utc"],
+            row["post_minute_utc"],
+            row["last_fired_slot"],
+            now,
+        ):
+            continue
+        guild = client.get_guild(row["guild_id"])
+        if guild is None:
+            continue
+        ch = guild.get_channel_or_thread(row["channel_id"])
+        if ch is None:
+            try:
+                ch = await client.fetch_channel(row["channel_id"])
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                continue
+        try:
+            entries = get_top_relay_writers(row["guild_id"], 10)
+            await post_ranking_to_channel(client, ch, guild, entries)
+        except Exception as e:
+            print(f"[WARN] ranking_autopost guild={row['guild_id']}: {e}")
+        else:
+            set_ranking_last_fired_slot(row["guild_id"], ranking_slot_key_utc(now))
+
+
+@ranking_autopost_loop.before_loop
+async def before_ranking_autopost_loop():
+    await client.wait_until_ready()
 
 
 @client.event
@@ -191,6 +233,8 @@ async def on_ready():
     print("Slash commands synced.")
     print("Database ready.")
     client.start_time = START_TIME
+    if not ranking_autopost_loop.is_running():
+        ranking_autopost_loop.start()
 
 
 START_TIME = time.time()

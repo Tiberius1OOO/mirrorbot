@@ -151,7 +151,9 @@ On upgrade, `CREATE TABLE IF NOT EXISTS` runs automatically — your existing `b
 
 Most configuration commands require **Administrator**. **`/bot_info` is available to everyone** in the server.
 
-Administrator-only commands are **enforced in the bot** when someone runs them; members without **Administrator** get a permission error. They may still **see** those commands in the slash list unless you restrict them in Discord (**Server Settings → Integrations → your bot → manage**). **`/bot_info`** is meant for **everyone** — if normal members see **no** commands at all, check that integration (do not restrict all commands to admins only) and channel overrides for **Use Application Commands**.
+**Who sees which slash command in the picker:** Discord’s default is that **everyone in the server can see the full list** of the bot’s commands (including admin-only ones). Hiding commands per role is done in **Server Settings → Integrations → your bot → manage**, not in this repo.
+
+**When someone runs a command they are not allowed to use:** the bot replies with a **private (ephemeral)** embed that names the command, repeats its **description** (“what it’s for”), and explains that they need the missing **Discord permissions** (usually **Administrator** for this bot) or that the **bot** is missing channel permissions — so members get a clear explanation instead of only a generic Discord error.
 
 | Command | Who can use it | Description |
 |--------|----------------|-------------|

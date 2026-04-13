@@ -62,6 +62,7 @@ def _ensure_dependencies():
 _ensure_dependencies()
 
 import asyncio
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -71,6 +72,7 @@ from discord import app_commands
 from discord.ext import tasks
 
 from commands import context, slash
+from helpers.app_command_errors import respond_app_command_permission_denied
 from helpers.database import (
     get_guild_config,
     get_observed_channel_ids,
@@ -86,6 +88,8 @@ from helpers.ranking_autopost import ranking_should_fire, ranking_slot_key_utc
 from helpers.ranking_display import post_ranking_to_channel
 from helpers.text import count_words, split_message
 from helpers.webhooks import get_or_create_webhook
+
+_log = logging.getLogger(__name__)
 
 TOKEN = os.getenv("DISCORD_TOKEN_MIRRORBOT")
 if not TOKEN:
@@ -112,6 +116,18 @@ tree = app_commands.CommandTree(client)
 # Register command modules
 slash.register(tree, client)
 context.register(tree, client)
+
+
+@tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError,
+) -> None:
+    if await respond_app_command_permission_denied(interaction, error):
+        return
+    cmd = interaction.command
+    if cmd is not None and not cmd._has_any_error_handlers():
+        _log.error("Ignoring exception in command %r", cmd.name, exc_info=error)
 
 
 @tasks.loop(minutes=1.0)

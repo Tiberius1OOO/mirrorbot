@@ -420,16 +420,22 @@ def register(tree, client):
             return
 
         guild_id = guild.id
-        is_admin = interaction.user.guild_permissions.administrator
-
-        member = interaction.member
-        if member is None:
+        user = interaction.user
+        if isinstance(user, discord.Member):
+            member = user
+        else:
             try:
-                member = await guild.fetch_member(interaction.user.id)
+                member = await guild.fetch_member(user.id)
             except discord.HTTPException:
-                member = interaction.user
+                member = user
 
-        if hasattr(member, "joined_at") and member.joined_at:
+        is_admin = (
+            member.guild_permissions.administrator
+            if isinstance(member, discord.Member)
+            else False
+        )
+
+        if isinstance(member, discord.Member) and member.joined_at:
             joined_str = member.joined_at.strftime("%Y-%m-%d %H:%M UTC")
         else:
             joined_str = "Unknown"

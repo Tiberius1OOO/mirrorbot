@@ -40,6 +40,8 @@ from helpers.flowtext_export import build_flowtext_export, safe_txt_filename
 from helpers.observe_backfill import backfill_observed_channel
 from helpers.ranking_display import build_ranking_embeds
 
+from commands.notes import register_notes_command
+
 
 def _truncate_field(text: str, limit: int = 1020) -> str:
     if len(text) <= limit:
@@ -857,3 +859,5 @@ def register(tree, client: _ClientWithStartTime):
             embeds=[user_embed, admin_embed],
             ephemeral=True,
         )
+
+    register_notes_command(tree, client)

@@ -104,6 +104,15 @@ def init_db():
         )
         """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS channel_notes (
+            guild_id INTEGER NOT NULL,
+            channel_id INTEGER NOT NULL,
+            body TEXT NOT NULL DEFAULT '',
+            PRIMARY KEY (guild_id, channel_id)
+        )
+        """)
+
     # Ensure uniqueness even on older databases
     cursor.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS
@@ -115,6 +124,44 @@ def init_db():
     conn.close()
 
     invalidate_observed_cache()
+
+
+# =========================================================
+# Channel notes (/notes shared notepad)
+# =========================================================
+
+
+def get_channel_note(guild_id: int, channel_id: int) -> str:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        SELECT body FROM channel_notes
+        WHERE guild_id = ? AND channel_id = ?
+        """,
+        (guild_id, channel_id),
+    )
+    row = cursor.fetchone()
+    conn.close()
+    if not row or row["body"] is None:
+        return ""
+    return str(row["body"])
+
+
+def set_channel_note(guild_id: int, channel_id: int, body: str) -> None:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO channel_notes (guild_id, channel_id, body)
+        VALUES (?, ?, ?)
+        ON CONFLICT(guild_id, channel_id)
+        DO UPDATE SET body = excluded.body
+        """,
+        (guild_id, channel_id, body),
+    )
+    conn.commit()
+    conn.close()
 
 
 # =========================================================

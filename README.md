@@ -1,292 +1,149 @@
 # DragonCopy Mirror Bot
 
-A Discord bot for **mirroring**, **copying**, **moving**, and **archiving** messages between channels. It is aimed at long-running story servers, archive channels, structured RP, and delayed relays. It can also **export a text channel to an EPUB** for reading or sharing.
+Discord bot for **mirroring**, **copying**, **moving**, and **archiving** channel messages. Built for story servers, archives, structured RP, and delayed relays — with EPUB and plain-text export.
+
+---
+
+## Raspberry Pi (recommended)
+
+One script handles install, start, stop, update, and boot auto-start. It soft-stops any old bot process, removes stray auto-start entries (`mirrorbot.service`, crontabs, etc.), then installs a single clean `dragoncopy` systemd service.
+
+```bash
+git clone https://github.com/Tiberius1OOO/mirrorbot.git
+cd mirrorbot
+chmod +x dragoncopy
+```
+
+Put your token in the system environment (once):
+
+```bash
+echo 'DISCORD_TOKEN_MIRRORBOT=your_token_here' | sudo tee -a /etc/environment
+```
+
+Then:
+
+```bash
+./dragoncopy install    # venv + deps + clean auto-start + start
+./dragoncopy stop
+./dragoncopy start
+./dragoncopy update     # git pull + deps + restart
+./dragoncopy status
+./dragoncopy restart
+./dragoncopy uninstall  # remove service only; keeps files
+```
+
+`update` pulls `main`, refreshes dependencies, and starts the bot again.
+
+The token is read from `DISCORD_TOKEN_MIRRORBOT` (same variable `bot.py` uses). The service also loads `/etc/environment` and optional `/etc/default/dragoncopy`.
 
 ---
 
 ## Features
 
-### Live relays
+| Area | What it does |
+|------|----------------|
+| **Live relays** | Mirror a source channel to a target (optional delay). One relay per source. Webhooks named **DragonCopy** keep display name + avatar. Attachments and long-message splits supported. |
+| **Copy message** | Right-click → **Apps → Copy message** → pick target. |
+| **Copy from here** | Right-click → **Apps → Copy everything from here** → copies that message and every newer one. Originals stay. |
+| **Cut from here** | Same range as copy-from-here, then deletes originals (needs **Manage Messages**). |
+| **Word stats** | `/observe` channels; `/bot_info`, `/ranking`, optional `/ranking_setup` autopost. |
+| **Exports** | `/export_flowtext` (plain `.txt`) and `/generate_book` / `/generate_book_beta` (EPUB). |
+| **Notes** | `/notes open` and `/notes info` — shared per-channel notepad. |
 
-- Mirror messages from one channel to another
-- Optional delay (spoiler buffers, moderation pacing, or staged publishing)
-- Multiple relays per server (**one relay per source channel** — each source maps to a single target)
-- Preserves display names and avatars using webhooks named **DragonCopy**
-- Splits messages longer than Discord’s 2000-character limit
-- Supports attachments
-- Counts successful relay sends in per-guild statistics (SQLite)
+Runtime state lives in SQLite at `data/bot.db` (created automatically). Older JSON configs under `configs/` are migrated on first start.
 
-### Single message copy
+---
 
-- Right-click a message → **Apps → Copy message**
-- Pick the target channel
-- Preserves author identity and attachments; long text is split safely
+## Slash commands
 
-### Copy everything from here
+Most config commands need **Administrator**. `/bot_info` is available to everyone.
 
-- Right-click a message → **Apps → Copy everything from here**
-- Pick the target channel
+Discord shows the full slash list to members by default. Hide commands per role under **Server Settings → Integrations → your bot**.
 
-The bot will copy the selected message and every **newer** message in that channel (chronological order). Originals stay in the source channel.
+| Command | Who | Description |
+|---------|-----|-------------|
+| `/setup` | Admin | Set current channel as error/diagnostics channel. |
+| `/start_relay` | Admin | Start relay: `source`, `target`, `delay_seconds`. |
+| `/stop_relay` | Admin | Stop relay for a source channel. |
+| `/instances` | Admin | List active relays. |
+| `/observe` | Admin | Count words in a text/announcement channel or forum topic. |
+| `/unobserve` | Admin | Stop counting (totals kept; watermark avoids double-count). |
+| `/observing` | Admin | List observed channels. |
+| `/ranking` | Admin | Public top-10 word leaderboard. |
+| `/ranking_setup` | Admin | Schedule ranking posts (12h/24h UTC). |
+| `/bot_info` | Everyone | Personal stats; admins also see diagnostics. Ephemeral. |
+| `/generate_book` | Admin | Clean EPUB export. |
+| `/generate_book_beta` | Admin | EPUB with per-post Discord links. |
+| `/export_flowtext` | Admin | Plain-text channel export. |
+| `/notes open` | — | Shared channel notepad. |
+| `/notes info` | — | Notes help / limits. |
 
-Preserves the same behavior as single-message copy for identity, attachments, and splitting. Empty / system messages with no text or attachments are skipped.
+Context menus (**Copy message**, **Copy everything from here**, **Cut everything from here**) also require **Administrator**.
 
-### Cut everything from here
+---
 
-- Right-click a message → **Apps → Cut everything from here**
-- Pick the target channel
+## EPUB export
 
-The bot will:
+Required options: **title**, **author**, **source_channel**, **upload_channel**.
 
-1. Copy the selected message and every **newer** message in that channel (chronological order)
-2. Delete the originals in the source channel (where the API allows)
+Optional: **invite_link**, **cover_image**, **summary**, **chapter_file**.
 
-Preserves the same behavior as copy for identity, attachments, and splitting. Requires **Manage Messages** in the source channel for deletes to succeed.
+**source_channel** may be a text/announcement channel or a **thread** (forum topic). Do not pick the forum listing channel.
 
-### Observed-channel word stats and leaderboard
+### Chapter file (optional)
 
-- Admins add channels or forum topics with **`/observe`**; the bot counts words there (relays do **not** change these totals).
-- **`/bot_info`** shows each member their own stats (everyone) and extra diagnostics for admins.
-- **`/ranking`** (admin-only to invoke) posts a **public** top-**10** leaderboard in the channel: **1–5** with avatars, **6–10** as names and word counts.
-- **`/ranking_setup`** (admin, ephemeral) can turn on **scheduled** posts of that leaderboard to a chosen channel, on a **12** or **24** hour UTC schedule.
-
-### Plain text export (`/export_flowtext`)
-
-Administrator slash command: reads the same **source** channel types as EPUB (**text**, **announcement**, or **thread** / forum topic — not the forum listing). It collects **only message bodies** (oldest → newest), **no** author names, avatars, or timestamps. Empty messages are skipped; **webhook** posts are kept, ordinary **bot** posts skipped (same rules as EPUB). Messages are separated by a **blank line** in the `.txt`. The file is posted to **upload_channel** as a Discord attachment (UTF-8). Optional **filename_base** sets the download name without `.txt` (default: sanitized source channel name).
-
-### EPUB export (books)
-
-Administrator slash commands build an **EPUB** from message history (non-empty messages; **webhook** messages are kept, ordinary **bot** messages are skipped).
-
-| Command | Purpose |
-|--------|---------|
-| `/generate_book` | Clean publication build (no per-post Discord links in the story body). |
-| `/generate_book_beta` | Same export, but each in-world post can include a **“To Post”** link back to Discord. |
-
-#### How to run a book command
-
-1. Type `/generate_book` or `/generate_book_beta` in a channel where you can use the bot (any channel is fine; it does not change what you export).
-2. Discord shows a form with **options** (fields). Fill in the **required** ones first, then add **optional** ones if you want them.
-3. **Required options** must all be set before you can submit. **Optional** options can be left empty or not attached.
-4. Submit the command. The bot reads the **source**, builds the EPUB, and posts the finished file as an attachment in **upload_channel** (and confirms to you ephemerally).
-
-#### Required options (both commands)
-
-These always appear and must be filled:
-
-| Option | What to enter |
-|--------|----------------|
-| **title** | Book title as it should appear on the cover and title page. |
-| **author** | Author line for the EPUB metadata (can be a pen name or “Various”). |
-| **source_channel** | Where the story lives: a **text** or **announcement** channel, or a **thread** (e.g. a **forum topic** / side-story post). The bot reads full history **oldest → newest**. **Do not** select the forum *listing* channel — open the topic and pick that **thread**. |
-| **upload_channel** | Where the bot should **post the `.epub` file** when it is done (any text channel or thread the bot can send files in). |
-
-#### Optional options (both commands)
-
-You can skip any of these; the EPUB still generates.
-
-| Option | What it does |
-|--------|----------------|
-| **invite_link** | If you paste a **permanent server invite URL**, it is shown on the EPUB **info** page under “Generated from”. Leave **empty** to omit the link (only the server name appears). |
-| **cover_image** | Attach an image file to use as the **cover**. |
-| **summary** | Short text; if set, the EPUB gets an extra **Summary** page at the end. |
-| **chapter_file** | Attach a `.txt` file that defines **chapter titles** and **breaks** (see below). Without it, the book is one continuous flow of posts (still split into EPUB chapters internally only if you use a chapter file). |
-
-#### Chapter file (optional)
-
-Use this when you want **named chapters** in the EPUB instead of one continuous run of posts.
-
-1. **Create a plain text file** (for example `chapters.txt`) on your computer.
-2. When you run `/generate_book` or `/generate_book_beta`, set **chapter_file** and **upload that `.txt` file** in Discord (same as attaching any file to a slash command option).
-3. The bot reads the file as **UTF-8** text, **one chapter boundary per non-empty line**.
-
-**Line format** (must match exactly — note the commas and straight double quotes around the title):
+Attach a UTF-8 `.txt` with one boundary per line:
 
 ```text
 <message_id>,"Chapter title"
 ```
 
-- **message_id** — the numeric **Discord message ID** (snowflake) of the post that should **start** that chapter. Each message has its **own** ID, so each new chapter line uses a **different** ID (the first message of that chapter).  
-- **"Chapter title"** — the title for that chapter in straight double quotes.
+Enable **Developer Mode** in Discord → right-click a message → **Copy Message ID** (or take the last number from **Copy Message Link**).
 
-**What the bot does with the file:** It loads the channel **oldest → newest** (same order as the story). It walks through messages in that order. Whenever it reaches a message whose ID appears in your file, it **starts a new chapter**: it inserts a chapter heading, uses the **title from that line**, and numbers chapters automatically (**Chapter 1**, **Chapter 2**, …). Content **before** the first listed ID stays in the opening section without a chapter title from the file. Content **after** each listed ID belongs to that chapter until the next listed ID (or the end of the channel).
-
-Example file with **two** chapter breaks (two different message IDs — one per chapter start):
-
-```text
-1234567890123456789012,"Opening"
-9876543210987654321098,"The Road"
-```
-
-#### How to get a message ID (chapter start)
-
-You need the ID of the **exact message** where you want the chapter to begin.
-
-1. In Discord, open **User Settings** → **App Settings** → **Advanced**.
-2. Turn **Developer Mode** **on**.
-3. Go to the channel you are exporting, find the message that should **start** the chapter.
-4. **Right-click** that message (or use the message’s **⋯** menu) and choose **Copy Message ID**.
-5. Paste into your `.txt` file as the number before the comma on that chapter’s line.
-
-**Alternative:** **Copy Message Link**, then take the **last number** in the URL — that is the message ID (the URL looks like `https://discord.com/channels/<guild_id>/<channel_id>/<message_id>`).
+Webhook posts are kept; ordinary bot posts are skipped. Files are written under `data/<guild_id>/`.
 
 ---
 
-Generated EPUB files are written under `data/<guild_id>/` (existing `.epub` files in that folder are replaced when a new book is generated for the guild).
+## Bot permissions
 
-### Database (SQLite)
+Minimum: View Channel, Send Messages, Embed Links, Manage Webhooks, Read Message History, Attach Files, and **Manage Messages** (for cut).
 
-Configuration lives in `data/bot.db` (not JSON at runtime).
+In the Developer Portal, enable **Server Members Intent** and **Message Content Intent**.
 
-On first startup after upgrading from older JSON configs, files in:
-
-```text
-configs/<guild_id>.json
-```
-
-are migrated and renamed to:
-
-```text
-<guild_id>.migrated.json
-```
-
-Tables include **guilds** (error channel), **relays**, **stats** (messages mirrored counter), **relay_word_stats** (per-member word totals from **observed** channels), **observed_channels** (which channels/threads count toward stats), **channel_word_watermarks** (so re-adding `/observe` after `/unobserve` only scans **new** history and does not double-count old messages), and **ranking_autopost** (optional schedule for automatic `/ranking`-style posts in a channel).
-
-On upgrade, `CREATE TABLE IF NOT EXISTS` runs automatically — your existing `bot.db` is extended in place; no manual migration file is required.
+Members who use slash commands need **Use Application Commands** in that channel.
 
 ---
 
-## Commands
-
-Most configuration commands require **Administrator**. **`/bot_info` is available to everyone** in the server.
-
-**Who sees which slash command in the picker:** Discord’s default is that **everyone in the server can see the full list** of the bot’s commands (including admin-only ones). Hiding commands per role is done in **Server Settings → Integrations → your bot → manage**, not in this repo.
-
-**When someone runs a command they are not allowed to use:** the bot replies with a **private (ephemeral)** embed that names the command, repeats its **description** (“what it’s for”), and explains that they need the missing **Discord permissions** (usually **Administrator** for this bot) or that the **bot** is missing channel permissions — so members get a clear explanation instead of only a generic Discord error.
-
-| Command | Who can use it | Description |
-|--------|----------------|-------------|
-| `/setup` | Administrator | Sets the **current channel** as the bot’s error/diagnostics channel (legacy logging; not required for `/bot_info`). |
-| `/start_relay` | Administrator | Start a relay: `source`, `target`, `delay_seconds`. Fails if a relay for that **source** already exists. |
-| `/stop_relay` | Administrator | Stop the relay for a given **source** channel. |
-| `/instances` | Administrator | List active relays (channel mentions). |
-| `/observe` | Administrator | Pick a **text** channel, **announcement** channel, or **forum topic thread**. The bot **scans full message history** once (initial word counts), then **keeps counting** new messages until `/unobserve`. Nothing is tracked until an admin runs this. |
-| `/unobserve` | Administrator | Stop counting in that channel/thread. **Totals stay**; a **watermark** remembers how far history was scanned so `/observe` again only adds **new** messages. |
-| `/observing` | Administrator | List all channels/threads currently observed. |
-| `/ranking` | Administrator | Posts the **top 10** writers by observed-channel word count **in the channel** (public message): ranks **1–5** use avatars; **6–10** are names and counts only. |
-| `/ranking_setup` | Administrator | Configure **automatic** ranking posts (reply is **ephemeral**): target channel/thread, **12** or **24** hour cadence, first post time **`HH:MM` in UTC**, or disable autopost. Discord has no per-server timezone — convert local time to UTC. **12h** posts at that UTC time and again 12 hours later; **24h** once per day at that clock time. |
-| `/bot_info` | **Everyone** | **Personal card:** avatar, join date, **words** from **observed** channels, **rank**, server total. **Administrators** also get diagnostics: relays, **observed list**, leaderboard, etc. **Ephemeral**. |
-| `/generate_book` | Administrator | Build a clean EPUB from a source channel and upload it to a chosen channel. |
-| `/generate_book_beta` | Administrator | Build a beta EPUB with per-post links to Discord. |
-| `/export_flowtext` | Administrator | Export **plain text only** from a source channel/thread to a `.txt` file in **upload_channel** (same channel rules as EPUB; no usernames in the file). Optional **filename_base**. |
-
-### Word tracking and ranking (`/observe`)
-
-- **Relays do not affect stats.** Only channels (or forum topics) an admin adds with **`/observe`** are counted.
-- On **`/observe`**, the bot runs an **initial history scan** (same rules as EPUBs: normal **bot** posts are skipped, **webhook** posts count), then **live** messages in that channel add words until **`/unobserve`**.
-- **Re-observing** after **`/unobserve`** only processes messages **after** the saved watermark, so old text is **not** double-counted.
-- Counts use whitespace-split words (like EPUB export). Only traffic **while the bot is running** is counted for live messages; the backlog scan runs at `/observe` time.
-- Rankings are per-server. If nobody has used **`/observe`** yet, there is no leaderboard.
-- **`/ranking`** (admin-only to run, **public** result) and optional **`/ranking_setup`** autoposts use the same leaderboard data as **`/bot_info`**.
-- If you used an **older** build that counted **relay sources** automatically, those totals may still be in the database; from now on, **only `/observe` channels** gain new words.
-
-Context menu commands (**Copy message**, **Copy everything from here**, **Cut everything from here**) require **Administrator** to run (enforced by the bot).
-
----
-
-## Installation
-
-### Requirements
-
-- **Python 3.10+**
-- A Discord bot token with the **Message Content Intent** enabled (the bot reads message content for relays and EPUB export)
-- Dependencies listed in `requirements.txt`
-
-### Clone the repository
+## Manual install (without the script)
 
 ```bash
 git clone https://github.com/Tiberius1OOO/mirrorbot.git
 cd mirrorbot
-```
-
-### Create a virtual environment
-
-**Linux / macOS**
-
-```bash
 python3 -m venv venv
 source venv/bin/activate
-```
-
-**Windows (PowerShell)**
-
-```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-```
-
-### Install dependencies
-
-```bash
 pip install -r requirements.txt
-```
-
-If you skip this and later **merge or pull** a version that added packages (for example EPUB support), running `python bot.py` will detect missing imports and run `pip install -r requirements.txt` automatically once (requires network access). If that fails, run the command above manually in the same environment you use to run the bot.
-
-### Set the bot token
-
-**Linux / macOS**
-
-```bash
 export DISCORD_TOKEN_MIRRORBOT="your_token_here"
-```
-
-**Windows (PowerShell)**
-
-```powershell
-$env:DISCORD_TOKEN_MIRRORBOT="your_token_here"
-```
-
-### Run the bot
-
-```bash
 python bot.py
 ```
 
----
-
-## Required permissions
-
-The bot needs, at minimum:
-
-- View Channel  
-- Send Messages  
-- Embed Links  
-- Manage Webhooks  
-- Read Message History  
-- Attach Files  
-- **Manage Messages** (required for cut/delete operations)
-
-**Channel permissions for members:** anyone who should type slash commands (e.g. `/bot_info`) needs **Use Application Commands** allowed in that channel (or inherited from the category). Denying it hides app commands there.
-
-Enable **Server Members Intent** and **Message Content Intent** in the Discord Developer Portal if your bot should see member display names reliably and read message text for relays and EPUB generation.
+If you pull a release that adds packages and skip `pip install`, `python bot.py` will try to install from `requirements.txt` once automatically.
 
 ---
 
 ## Known limitations
 
-- Messages older than **14 days** cannot be bulk-deleted (Discord API limitation); cuts may leave some old messages behind.
-- Large copy, cut, or relay bursts may be slow due to **rate limits**.
-- **Delayed relay** messages that have not been sent yet are **lost** if the bot restarts during the wait.
-- Each **source** channel can only have **one** active relay at a time. To change target or delay for that source, run `/stop_relay` on the source first, then `/start_relay` again.
-- Very large text exports may hit Discord’s **attachment size** limit (typically **25 MB** for bots); EPUB generation writes to disk under `data/<guild_id>/` instead.
+- Very old messages may not delete during cut (Discord API limits); the bot deletes one-by-one, not bulk.
+- Large copy/cut/relay bursts are paced for rate limits.
+- Delayed relay messages still waiting are lost if the process restarts mid-delay.
+- One active relay per source channel — `/stop_relay` before changing target or delay.
+- Huge text exports can hit Discord’s attachment size limit (~25 MB for bots).
 
 ---
 
 ## License
 
-This project is licensed under the **Creative Commons Attribution–NonCommercial 4.0 (CC BY-NC 4.0)** license.
+**Creative Commons Attribution–NonCommercial 4.0 (CC BY-NC 4.0)**.
 
-You may use and modify this bot for **non-commercial** purposes, provided you give appropriate credit to the original author. Commercial use requires explicit permission.
+Non-commercial use and modification with credit. Commercial use needs explicit permission.
 
-Full license: [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/legalcode)
+Full text: [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/legalcode)

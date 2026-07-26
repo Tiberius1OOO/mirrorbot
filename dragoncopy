@@ -1,0 +1,429 @@
+#!/usr/bin/env bash
+# DragonCopy — install / start / stop / update manager for Raspberry Pi & Linux
+#
+# Usage:
+#   ./dragoncopy install
+#   ./dragoncopy start
+#   ./dragoncopy stop
+#   ./dragoncopy restart
+#   ./dragoncopy update
+#   ./dragoncopy status
+#   ./dragoncopy uninstall
+#
+# Expects DISCORD_TOKEN_MIRRORBOT in the environment (e.g. /etc/environment).
+
+set -euo pipefail
+
+SERVICE_NAME="dragoncopy"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+TOKEN_VAR="DISCORD_TOKEN_MIRRORBOT"
+OLD_SERVICE_NAMES=(
+  mirrorbot
+  mirror-bot
+  dragoncopy
+  DragonCopy
+)
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VENV_DIR="${ROOT}/venv"
+PYTHON_BIN="${VENV_DIR}/bin/python"
+PIP_BIN="${VENV_DIR}/bin/pip"
+BOT_ENTRY="${ROOT}/bot.py"
+REQ_FILE="${ROOT}/requirements.txt"
+
+log()  { printf '==> %s\n' "$*"; }
+warn() { printf '!!  %s\n' "$*" >&2; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+need_sudo() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    if command -v sudo >/dev/null 2>&1; then
+      SUDO=(sudo)
+    else
+      die "This action needs root. Re-run as root or install sudo."
+    fi
+  else
+    SUDO=()
+  fi
+}
+
+run_root() {
+  need_sudo
+  "${SUDO[@]}" "$@"
+}
+
+have_systemctl() {
+  command -v systemctl >/dev/null 2>&1
+}
+
+token_present() {
+  # Interactive shell / already exported
+  if [[ -n "${!TOKEN_VAR:-}" ]]; then
+    return 0
+  fi
+  # Common system locations on a Pi
+  if [[ -f /etc/environment ]] && grep -Eq "^[[:space:]]*${TOKEN_VAR}=" /etc/environment; then
+    return 0
+  fi
+  if [[ -f "/etc/default/${SERVICE_NAME}" ]] && grep -Eq "^[[:space:]]*${TOKEN_VAR}=" "/etc/default/${SERVICE_NAME}"; then
+    return 0
+  fi
+  return 1
+}
+
+load_token_hint() {
+  if token_present; then
+    log "Found ${TOKEN_VAR} in the environment or system config."
+  else
+    warn "${TOKEN_VAR} is not set."
+    warn "Add it to /etc/environment, for example:"
+    warn "  ${TOKEN_VAR}=your_token_here"
+    warn "Then log out/in (or reboot) so systemd and shells can see it."
+  fi
+}
+
+unit_exists() {
+  local name="$1"
+  [[ -f "/etc/systemd/system/${name}.service" ]] \
+    || [[ -f "/lib/systemd/system/${name}.service" ]] \
+    || [[ -L "/etc/systemd/system/${name}.service" ]] \
+    || systemctl status "${name}.service" >/dev/null 2>&1
+}
+
+soft_stop_processes() {
+  log "Soft-stopping any running DragonCopy / mirrorbot processes..."
+
+  # Prefer our managed service first
+  if have_systemctl; then
+    if unit_exists "${SERVICE_NAME}"; then
+      run_root systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
+    fi
+    for name in "${OLD_SERVICE_NAMES[@]}"; do
+      if [[ "${name}" == "${SERVICE_NAME}" ]]; then
+        continue
+      fi
+      if unit_exists "${name}"; then
+        run_root systemctl stop "${name}.service" 2>/dev/null || true
+      fi
+    done
+  fi
+
+  # Gracefully stop stray python processes for this checkout / known bot names
+  local pids
+  pids="$(pgrep -f "[Pp]ython.*bot\\.py" 2>/dev/null || true)"
+  if [[ -n "${pids}" ]]; then
+    local kill_list=()
+    local pid cmd cwd
+    for pid in ${pids}; do
+      cmd="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+      cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+      if [[ "${cmd}" == *"${ROOT}"* ]] \
+        || [[ "${cwd}" == "${ROOT}"* ]] \
+        || [[ "${cmd}" == *mirrorbot* ]] \
+        || [[ "${cmd}" == *DragonCopy* ]] \
+        || [[ "${cmd}" == *dragoncopy* ]]; then
+        kill_list+=("${pid}")
+      fi
+    done
+    if ((${#kill_list[@]})); then
+      log "Sending SIGTERM to: ${kill_list[*]}"
+      kill -TERM "${kill_list[@]}" 2>/dev/null || true
+      sleep 2
+      local still=()
+      for pid in "${kill_list[@]}"; do
+        if kill -0 "${pid}" 2>/dev/null; then
+          still+=("${pid}")
+        fi
+      done
+      if ((${#still[@]})); then
+        warn "Forcing stop: ${still[*]}"
+        kill -KILL "${still[@]}" 2>/dev/null || true
+      fi
+    fi
+  fi
+}
+
+cleanup_stray_autostart() {
+  log "Checking for stray auto-start entries..."
+
+  if have_systemctl; then
+    local name unit
+    for name in "${OLD_SERVICE_NAMES[@]}"; do
+      unit="${name}.service"
+      # Skip the unit we ourselves own — it gets rewritten on install
+      if [[ "${name}" == "${SERVICE_NAME}" ]]; then
+        continue
+      fi
+      if unit_exists "${name}"; then
+        warn "Removing old systemd unit: ${unit}"
+        run_root systemctl disable --now "${unit}" 2>/dev/null || true
+        if [[ -f "/etc/systemd/system/${unit}" ]] || [[ -L "/etc/systemd/system/${unit}" ]]; then
+          run_root rm -f "/etc/systemd/system/${unit}"
+        fi
+        if [[ -f "/lib/systemd/system/${unit}" ]]; then
+          warn "System unit /lib/systemd/system/${unit} exists; masking so it cannot auto-start."
+          run_root systemctl mask "${unit}" 2>/dev/null || true
+        fi
+      fi
+    done
+    run_root systemctl daemon-reload 2>/dev/null || true
+  fi
+
+  # Drop crontab @reboot lines that start this bot (current user + root if possible)
+  cleanup_crontab_for_user() {
+    local user="$1"
+    local tmp
+    if ! crontab -u "${user}" -l >/tmp/dragoncopy_cron_old 2>/dev/null; then
+      return 0
+    fi
+    if grep -Eiq 'bot\.py|mirrorbot|dragoncopy' /tmp/dragoncopy_cron_old; then
+      warn "Cleaning bot-related crontab entries for user ${user}"
+      tmp="$(mktemp)"
+      grep -Eiv 'bot\.py|mirrorbot|dragoncopy' /tmp/dragoncopy_cron_old >"${tmp}" || true
+      if [[ -s "${tmp}" ]]; then
+        run_root crontab -u "${user}" "${tmp}"
+      else
+        run_root crontab -u "${user}" -r 2>/dev/null || true
+      fi
+      rm -f "${tmp}"
+    fi
+    rm -f /tmp/dragoncopy_cron_old
+  }
+
+  cleanup_crontab_for_user "$(id -un)"
+  if [[ "$(id -un)" != "root" ]]; then
+    cleanup_crontab_for_user root 2>/dev/null || true
+  fi
+
+  # rc.local mentions
+  if [[ -f /etc/rc.local ]] && grep -Eiq 'bot\.py|mirrorbot|dragoncopy' /etc/rc.local; then
+    warn "Found bot start lines in /etc/rc.local — comment them out so only this manager auto-starts the bot."
+    run_root cp /etc/rc.local "/etc/rc.local.dragoncopy.bak.$(date +%s)"
+    run_root sed -i -E 's|^([^#].*(bot\.py|mirrorbot|dragoncopy).*)|# disabled by dragoncopy manager: \1|I' /etc/rc.local
+  fi
+}
+
+ensure_python() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    die "python3 is required. On Raspberry Pi OS: sudo apt update && sudo apt install -y python3 python3-venv python3-pip"
+  fi
+  if ! python3 -c "import venv" 2>/dev/null; then
+    warn "python3-venv missing; attempting to install..."
+    if command -v apt-get >/dev/null 2>&1; then
+      run_root apt-get update -y
+      run_root apt-get install -y python3-venv python3-pip
+    else
+      die "Install python3-venv manually, then re-run."
+    fi
+  fi
+}
+
+ensure_venv() {
+  ensure_python
+  if [[ ! -x "${PYTHON_BIN}" ]]; then
+    log "Creating virtualenv at ${VENV_DIR}"
+    python3 -m venv "${VENV_DIR}"
+  fi
+  [[ -x "${PYTHON_BIN}" ]] || die "Failed to create venv at ${VENV_DIR}"
+}
+
+install_deps() {
+  ensure_venv
+  [[ -f "${REQ_FILE}" ]] || die "Missing ${REQ_FILE}"
+  log "Installing / updating Python dependencies..."
+  "${PIP_BIN}" install --upgrade pip
+  "${PIP_BIN}" install -r "${REQ_FILE}"
+}
+
+write_service_unit() {
+  have_systemctl || die "systemctl not found — this manager needs systemd (Raspberry Pi OS / most Linux)."
+  [[ -x "${PYTHON_BIN}" ]] || die "venv python missing; run: ./dragoncopy install"
+  [[ -f "${BOT_ENTRY}" ]] || die "Missing ${BOT_ENTRY}"
+
+  local run_user run_group
+  run_user="$(stat -c '%U' "${ROOT}" 2>/dev/null || id -un)"
+  run_group="$(stat -c '%G' "${ROOT}" 2>/dev/null || id -gn)"
+
+  log "Writing systemd unit ${SERVICE_FILE} (user=${run_user})"
+  run_root tee "${SERVICE_FILE}" >/dev/null <<EOF
+[Unit]
+Description=DragonCopy Discord Mirror Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${run_user}
+Group=${run_group}
+WorkingDirectory=${ROOT}
+# System-wide env (Pi often keeps DISCORD_TOKEN_MIRRORBOT here)
+EnvironmentFile=-/etc/environment
+EnvironmentFile=-/etc/default/${SERVICE_NAME}
+ExecStart=${PYTHON_BIN} ${BOT_ENTRY}
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  run_root systemctl daemon-reload
+  run_root systemctl enable "${SERVICE_NAME}.service"
+}
+
+cmd_install() {
+  log "Installing DragonCopy in ${ROOT}"
+  soft_stop_processes
+  cleanup_stray_autostart
+  ensure_python
+  ensure_venv
+  install_deps
+  load_token_hint
+  write_service_unit
+  if token_present; then
+    log "Starting bot..."
+    run_root systemctl restart "${SERVICE_NAME}.service"
+    sleep 1
+    cmd_status
+  else
+    warn "Service installed and enabled, but not started (token missing)."
+    warn "Set ${TOKEN_VAR}, then run: ./dragoncopy start"
+  fi
+  log "Done. Manage with: ./dragoncopy start|stop|restart|update|status"
+}
+
+cmd_start() {
+  have_systemctl || die "systemctl required"
+  [[ -f "${SERVICE_FILE}" ]] || die "Not installed yet. Run: ./dragoncopy install"
+  load_token_hint
+  token_present || die "${TOKEN_VAR} is not set; cannot start."
+  soft_stop_processes
+  run_root systemctl start "${SERVICE_NAME}.service"
+  sleep 1
+  cmd_status
+}
+
+cmd_stop() {
+  have_systemctl || die "systemctl required"
+  log "Stopping DragonCopy..."
+  if [[ -f "${SERVICE_FILE}" ]]; then
+    run_root systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
+  fi
+  soft_stop_processes
+  log "Stopped."
+}
+
+cmd_restart() {
+  cmd_stop
+  cmd_start
+}
+
+cmd_update() {
+  log "Updating DragonCopy..."
+  soft_stop_processes
+
+  if [[ -d "${ROOT}/.git" ]]; then
+    log "Pulling latest code..."
+    # Prefer main; fall back to whatever is checked out
+    if git -C "${ROOT}" rev-parse --verify origin/main >/dev/null 2>&1; then
+      git -C "${ROOT}" fetch origin main
+      git -C "${ROOT}" pull --ff-only origin main || git -C "${ROOT}" pull --ff-only
+    else
+      git -C "${ROOT}" pull --ff-only
+    fi
+  else
+    warn "Not a git checkout — skipping code pull. Update files manually if needed."
+  fi
+
+  install_deps
+
+  if [[ ! -f "${SERVICE_FILE}" ]]; then
+    warn "Service unit missing — running full install path for systemd."
+    cleanup_stray_autostart
+    write_service_unit
+  else
+    # Refresh unit in case paths/user changed
+    write_service_unit
+  fi
+
+  if token_present; then
+    log "Starting bot after update..."
+    run_root systemctl restart "${SERVICE_NAME}.service"
+    sleep 1
+    cmd_status
+  else
+    warn "Updated, but token missing — not starting. Fix ${TOKEN_VAR}, then: ./dragoncopy start"
+  fi
+}
+
+cmd_status() {
+  if have_systemctl && [[ -f "${SERVICE_FILE}" ]]; then
+    systemctl --no-pager --full status "${SERVICE_NAME}.service" || true
+  else
+    warn "systemd unit not installed."
+  fi
+  local pids
+  pids="$(pgrep -af "[Pp]ython.*bot\\.py" 2>/dev/null || true)"
+  if [[ -n "${pids}" ]]; then
+    log "Matching python bot processes:"
+    printf '%s\n' "${pids}"
+  fi
+  if token_present; then
+    log "${TOKEN_VAR}: present"
+  else
+    warn "${TOKEN_VAR}: missing"
+  fi
+}
+
+cmd_uninstall() {
+  log "Uninstalling DragonCopy service (code and venv are kept)..."
+  soft_stop_processes
+  if have_systemctl; then
+    run_root systemctl disable --now "${SERVICE_NAME}.service" 2>/dev/null || true
+    if [[ -f "${SERVICE_FILE}" ]]; then
+      run_root rm -f "${SERVICE_FILE}"
+    fi
+    run_root systemctl daemon-reload
+  fi
+  cleanup_stray_autostart
+  log "Service removed. Delete ${ROOT} manually if you also want the files gone."
+}
+
+usage() {
+  cat <<EOF
+DragonCopy manager
+
+Usage: $(basename "$0") <command>
+
+Commands:
+  install     Soft-stop old bot, remove stray auto-starts, create venv,
+              install dependencies, install systemd auto-start, start bot
+  start       Start the bot (systemd)
+  stop        Soft-stop the bot
+  restart     Stop then start
+  update      git pull + deps + restart
+  status      Show service / process / token status
+  uninstall   Remove systemd service and stray auto-starts (keeps files)
+
+Token: set ${TOKEN_VAR} in the system environment (e.g. /etc/environment).
+EOF
+}
+
+main() {
+  local cmd="${1:-}"
+  case "${cmd}" in
+    install)   cmd_install ;;
+    start)     cmd_start ;;
+    stop)      cmd_stop ;;
+    restart)   cmd_restart ;;
+    update)    cmd_update ;;
+    status)    cmd_status ;;
+    uninstall) cmd_uninstall ;;
+    -h|--help|help|"") usage ;;
+    *) die "Unknown command: ${cmd}. Try: ./dragoncopy help" ;;
+  esac
+}
+
+main "$@"

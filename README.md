@@ -22,6 +22,15 @@ A Discord bot for **mirroring**, **copying**, **moving**, and **archiving** mess
 - Pick the target channel
 - Preserves author identity and attachments; long text is split safely
 
+### Copy everything from here
+
+- Right-click a message → **Apps → Copy everything from here**
+- Pick the target channel
+
+The bot will copy the selected message and every **newer** message in that channel (chronological order). Originals stay in the source channel.
+
+Preserves the same behavior as single-message copy for identity, attachments, and splitting. Empty / system messages with no text or attachments are skipped.
+
 ### Cut everything from here
 
 - Right-click a message → **Apps → Cut everything from here**
@@ -181,7 +190,7 @@ Most configuration commands require **Administrator**. **`/bot_info` is availabl
 - **`/ranking`** (admin-only to run, **public** result) and optional **`/ranking_setup`** autoposts use the same leaderboard data as **`/bot_info`**.
 - If you used an **older** build that counted **relay sources** automatically, those totals may still be in the database; from now on, **only `/observe` channels** gain new words.
 
-Context menu commands (**Copy message**, **Cut everything from here**) require **Administrator** to run (enforced by the bot).
+Context menu commands (**Copy message**, **Copy everything from here**, **Cut everything from here**) require **Administrator** to run (enforced by the bot).
 
 ---
 
@@ -267,7 +276,7 @@ Enable **Server Members Intent** and **Message Content Intent** in the Discord D
 ## Known limitations
 
 - Messages older than **14 days** cannot be bulk-deleted (Discord API limitation); cuts may leave some old messages behind.
-- Large cut or relay bursts may be slow due to **rate limits**.
+- Large copy, cut, or relay bursts may be slow due to **rate limits**.
 - **Delayed relay** messages that have not been sent yet are **lost** if the bot restarts during the wait.
 - Each **source** channel can only have **one** active relay at a time. To change target or delay for that source, run `/stop_relay` on the source first, then `/start_relay` again.
 - Very large text exports may hit Discord’s **attachment size** limit (typically **25 MB** for bots); EPUB generation writes to disk under `data/<guild_id>/` instead.

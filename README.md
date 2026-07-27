@@ -6,7 +6,7 @@ Discord bot for **mirroring**, **copying**, **moving**, and **archiving** channe
 
 ## Raspberry Pi (recommended)
 
-One script handles install, start, stop, update, and boot auto-start. It soft-stops any old bot process, removes stray auto-start entries (`mirrorbot.service`, crontabs, etc.), then installs a single clean `dragoncopy` systemd service.
+One script handles install, start, stop, update, and boot auto-start. It soft-stops any old bot process, removes stray auto-start entries (`mirrorbot.service`, crontabs, etc.), then installs a single clean `dragoncopy` systemd service. Removed units are copied first to `/etc/systemd/system/*.dragoncopy.bak.*` so an old embedded token is not lost.
 
 ```bash
 git clone https://github.com/Tiberius1OOO/mirrorbot.git

@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# pi-inventory — collect what is installed / enabled / running on a Raspberry Pi
+#
+# Safe: READ-ONLY. Does not stop, disable, or delete anything.
+#
+# Usage:
+#   chmod +x pi-inventory
+#   ./pi-inventory
+#   ./pi-inventory /tmp/pi-inventory.txt
+#
+# Then paste the report (or attach the file) so a cleanup script can be written
+# that keeps only what you still want (e.g. DragonCopy / mirrorbot).
+
+set -euo pipefail
+
+OUT="${1:-$HOME/pi-inventory-$(date +%Y%m%d-%H%M%S).txt}"
+HOST="$(hostname 2>/dev/null || echo unknown)"
+NOW="$(date -Is 2>/dev/null || date)"
+
+# Redact obvious secrets in copied unit snippets
+redact() {
+  sed -E \
+    -e 's/(DISCORD_TOKEN[_A-Z0-9]*=)[^[:space:]"]+/\1***REDACTED***/g' \
+    -e 's/(TOKEN=)[^[:space:]"]+/\1***REDACTED***/g' \
+    -e 's/(API[_-]?KEY=)[^[:space:]"]+/\1***REDACTED***/g' \
+    -e 's/(PASSWORD=)[^[:space:]"]+/\1***REDACTED***/g' \
+    -e 's/(SECRET=)[^[:space:]"]+/\1***REDACTED***/g' \
+    -e 's/(Authorization:[[:space:]]*)[^[:space:]]+/\1***REDACTED***/g' \
+    -e 's|(ngrok[^[:space:]]*authtoken[[:space:]]+)[^[:space:]]+|\1***REDACTED***|g'
+}
+
+section() {
+  printf '\n================================================================================\n'
+  printf '%s\n' "$1"
+  printf '================================================================================\n'
+}
+
+run_cap() {
+  # run_cap "title" -- command...
+  local title="$1"
+  shift
+  section "$title"
+  if "$@" 2>&1 | redact; then
+    :
+  else
+    printf '(command exited %s)\n' "$?"
+  fi
+}
+
+{
+  section "Pi inventory report"
+  cat <<EOF
+Generated: ${NOW}
+Hostname:  ${HOST}
+User:      $(id 2>/dev/null || true)
+Kernel:    $(uname -a 2>/dev/null || true)
+OS:        $( ( [ -f /etc/os-release ] && . /etc/os-release && echo "${PRETTY_NAME:-unknown}" ) || true )
+Uptime:    $(uptime 2>/dev/null || true)
+
+How to use this file:
+  Send / paste this report. A cleanup script can then disable leftover bots,
+  tunnels (ngrok, etc.), and other services you no longer want — while keeping
+  Raspberry Pi OS essentials and DragonCopy / mirrorbot.
+EOF
+
+  run_cap "Disk / memory snapshot" bash -c 'df -h; echo; free -h 2>/dev/null || true'
+
+  run_cap "Enabled systemd services (boot auto-start)" \
+    systemctl list-unit-files --type=service --state=enabled --no-pager
+
+  run_cap "Enabled systemd timers" \
+    systemctl list-unit-files --type=timer --state=enabled --no-pager
+
+  run_cap "Running systemd services" \
+    systemctl list-units --type=service --state=running --no-pager
+
+  run_cap "Failed systemd units" \
+    systemctl --failed --no-pager
+
+  run_cap "Custom / drop-in units under /etc/systemd/system" \
+    bash -c 'ls -la /etc/systemd/system 2>/dev/null; echo; ls -la /etc/systemd/system/*.service /etc/systemd/system/*.timer /etc/systemd/system/*.wants 2>/dev/null || true'
+
+  section "Contents of custom service units in /etc/systemd/system (redacted)"
+  shopt -s nullglob
+  local_units=(/etc/systemd/system/*.service)
+  if ((${#local_units[@]} == 0)); then
+    echo "(none)"
+  else
+    for f in "${local_units[@]}"; do
+      # Skip symlinks into /lib that are just aliases
+      if [[ -L "$f" ]]; then
+        printf '\n--- %s -> %s ---\n' "$f" "$(readlink -f "$f" 2>/dev/null || readlink "$f")"
+        continue
+      fi
+      printf '\n--- %s ---\n' "$f"
+      redact <"$f" || true
+    done
+  fi
+  shopt -u nullglob
+
+  run_cap "systemctl cat dragoncopy / mirrorbot (if present)" \
+    bash -c 'systemctl cat dragoncopy.service 2>/dev/null | head -n 80; echo; systemctl cat mirrorbot.service 2>/dev/null | head -n 80; true'
+
+  run_cap "Listening TCP/UDP ports" \
+    bash -c 'ss -tulpn 2>/dev/null || netstat -tulpn 2>/dev/null || true'
+
+  run_cap "Top processes by CPU (snapshot)" \
+    bash -c 'ps aux --sort=-%cpu | head -n 40'
+
+  run_cap "Top processes by memory (snapshot)" \
+    bash -c 'ps aux --sort=-%mem | head -n 40'
+
+  run_cap "Python / node / bot-like processes" \
+    bash -c 'ps auxww | grep -Eic "python|node|bot|discord|ngrok|cloudflared|tunnel" >/dev/null
+      ps auxww | grep -Ei "python|node|bot\.py|discord|ngrok|cloudflared|tunnel|pm2|screen|tmux" | grep -v grep || echo "(none matched)"'
+
+  run_cap "User crontabs" \
+    bash -c 'echo "## $(id -un)"; crontab -l 2>/dev/null || echo "(no crontab)";
+      if command -v sudo >/dev/null; then
+        echo "## root"; sudo crontab -l 2>/dev/null || echo "(no root crontab or no permission)"
+      fi'
+
+  run_cap "/etc/cron.* and /etc/rc.local" \
+    bash -c 'ls -la /etc/cron.d /etc/cron.daily /etc/cron.hourly 2>/dev/null; echo;
+      echo "=== /etc/rc.local ==="; cat /etc/rc.local 2>/dev/null || echo "(no rc.local)"'
+
+  run_cap "Docker (if installed)" \
+    bash -c 'command -v docker >/dev/null && { docker ps -a; echo; docker compose ls 2>/dev/null || true; } || echo "(docker not installed)"'
+
+  run_cap "Podman (if installed)" \
+    bash -c 'command -v podman >/dev/null && podman ps -a || echo "(podman not installed)"'
+
+  run_cap "Screen / tmux sessions" \
+    bash -c 'command -v screen >/dev/null && screen -ls 2>&1 || echo "(no screen)";
+      command -v tmux >/dev/null && tmux ls 2>&1 || echo "(no tmux)"'
+
+  run_cap "Packages that look optional / third-party (name match)" \
+    bash -c 'dpkg -l 2>/dev/null | grep -Ei "ngrok|cloudflare|bot|discord|nodejs|docker|wireguard|tailscale|zerotier|snapd|plex|homebridge|mosquitto" || echo "(no name matches — does not mean nothing is installed)"'
+
+  run_cap "User systemd units (~/.config/systemd/user)" \
+    bash -c 'ls -la ~/.config/systemd/user 2>/dev/null || echo "(none)";
+      systemctl --user list-unit-files --state=enabled --no-pager 2>/dev/null || true'
+
+  run_cap "Heuristic: third-party-looking enabled services" \
+    bash -c '
+      # Flag common leftovers; NOT a verdict — human review still required.
+      systemctl list-unit-files --type=service --state=enabled --no-pager 2>/dev/null \
+        | grep -Eiv "^UNIT|^$" \
+        | grep -Ei "ngrok|cloudflared|tunnel|mirror|discord|bot|node|pm2|docker|podman|wireguard|tailscale|zerotier|plex|homebridge|snap|caddy|nginx|apache|httpd|mysql|mariadb|postgres|redis|mongo|jupyter|code-server|novnc|xrdp|vnc|tor|openvpn|minecraft|steam|pihole|adguard" \
+        || echo "(no heuristic matches among enabled services)"
+    '
+
+  section "End of report"
+  echo "Saved path will be printed on the terminal after this file is written."
+} >"${OUT}"
+
+chmod 600 "${OUT}" 2>/dev/null || true
+
+cat <<EOF
+==> Inventory written to:
+    ${OUT}
+
+Next steps:
+  1) Open the file (optional):  less ${OUT}
+  2) Send / paste that file contents in chat.
+  3) Say what you want to KEEP (e.g. DragonCopy / SSH / normal Pi desktop).
+  4) A custom cleanup script can then disable the rest (ngrok, old bots, etc.).
+
+This script changed nothing on your system.
+EOF

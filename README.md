@@ -29,6 +29,17 @@ chmod +x dragoncopy
 
 `update` pulls `main`, refreshes dependencies, and starts the bot again.
 
+### Pi cleanup helper (inventory only)
+
+If the Pi has leftover services from old bots/tunnels (`ngrok`, etc.), run this **read-only** report and paste it back so a cleanup script can be tailored:
+
+```bash
+chmod +x pi-inventory
+./pi-inventory
+```
+
+It writes a redacted report under your home directory (path printed at the end). It does **not** disable or delete anything.
+
 ---
 
 ## Features

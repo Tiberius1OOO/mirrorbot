@@ -40,6 +40,17 @@ chmod +x pi-inventory
 
 It writes a redacted report under your home directory (path printed at the end). It does **not** disable or delete anything.
 
+### Pi cleanup (dragonpi)
+
+After reviewing an inventory, use the tailored cleanup script. It **keeps** DragonCopy, SSH, and a normal desktop/RealVNC setup, and **stops/disables** EventDragon, ngrok, and the failed noVNC/x11vnc units (with backups):
+
+```bash
+chmod +x pi-cleanup
+./pi-cleanup --dry-run    # see plan
+./pi-cleanup              # type YES to apply
+./pi-cleanup --yes --disable-docker   # also turn Docker off (only used by EventDragon)
+```
+
 ---
 
 ## Features

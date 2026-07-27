@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+# pi-cleanup — tailored for hostname "dragonpi" inventory (2026-07-27)
+#
+# Goal: leave a normal Raspberry Pi OS desktop + SSH + DragonCopy (mirrorbot).
+# Stops/disables leftover EventDragon bot, ngrok, and broken VNC helpers.
+#
+# SAFE DEFAULTS:
+#   • Does NOT touch dragoncopy.service
+#   • Does NOT touch SSH, desktop (lightdm), networking, Bluetooth, printers
+#   • Backs up every unit it removes under /etc/systemd/system/*.pi-cleanup.bak.*
+#   • Asks for confirmation unless --yes
+#   • --dry-run prints actions only
+#
+# Usage:
+#   chmod +x pi-cleanup
+#   ./pi-cleanup --dry-run
+#   ./pi-cleanup
+#   ./pi-cleanup --yes
+#   ./pi-cleanup --yes --disable-docker   # also disable Docker (only used by EventDragon here)
+#   ./pi-cleanup --yes --purge-packages   # also apt-remove ngrok (optional)
+
+set -euo pipefail
+
+DRY_RUN=0
+ASSUME_YES=0
+DISABLE_DOCKER=0
+PURGE_PACKAGES=0
+BACKUP_DIR="/etc/systemd/system"
+
+# Services to stop + disable + remove custom unit files (if present under /etc/systemd/system)
+REMOVE_SERVICES=(
+  eventdragon-bot
+  eventdragon-ngrok
+  novnc
+  x11vnc
+)
+
+# Always keep (never touch)
+KEEP_HINT=(
+  dragoncopy
+  ssh
+  sshd
+  lightdm
+  NetworkManager
+  bluetooth
+  cups
+  vncserver-x11-serviced
+)
+
+log()  { printf '==> %s\n' "$*"; }
+warn() { printf '!!  %s\n' "$*" >&2; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+need_sudo() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    if command -v sudo >/dev/null 2>&1; then
+      SUDO=(sudo)
+    else
+      die "Need root / sudo."
+    fi
+  else
+    SUDO=()
+  fi
+}
+
+run() {
+  need_sudo
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    printf '[dry-run] %s\n' "$*"
+    return 0
+  fi
+  "$@"
+}
+
+run_root() {
+  need_sudo
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    printf '[dry-run] %s\n' "${SUDO[*]} $*"
+    return 0
+  fi
+  "${SUDO[@]}" "$@"
+}
+
+usage() {
+  cat <<EOF
+pi-cleanup — disable leftover bots/tunnels on dragonpi; keep DragonCopy + normal Pi
+
+  ./pi-cleanup --dry-run          show what would happen
+  ./pi-cleanup                    interactive confirm
+  ./pi-cleanup --yes              no prompt
+  ./pi-cleanup --yes --disable-docker
+  ./pi-cleanup --yes --purge-packages
+
+Removes/disables:
+  eventdragon-bot, eventdragon-ngrok, novnc, x11vnc
+  (and their EventDragon Docker Postgres container)
+
+Keeps:
+  dragoncopy, SSH, desktop, RealVNC (vncserver-x11-serviced), networking, etc.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    --yes|-y) ASSUME_YES=1; shift ;;
+    --disable-docker) DISABLE_DOCKER=1; shift ;;
+    --purge-packages) PURGE_PACKAGES=1; shift ;;
+    -h|--help|help) usage; exit 0 ;;
+    *) die "Unknown option: $1 (try --help)" ;;
+  esac
+done
+
+confirm() {
+  if [[ "${ASSUME_YES}" -eq 1 ]] || [[ "${DRY_RUN}" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    die "Not a TTY — re-run with --yes or --dry-run"
+  fi
+  printf '%s\n' "$1"
+  printf 'Type YES to continue: '
+  local ans
+  # shellcheck disable=SC2162
+  read -r ans
+  [[ "${ans}" == "YES" ]] || die "Aborted."
+}
+
+backup_unit() {
+  local unit_path="$1"
+  [[ -e "${unit_path}" ]] || return 0
+  local base bak
+  base="$(basename "${unit_path}")"
+  bak="${BACKUP_DIR}/${base}.pi-cleanup.bak.$(date +%Y%m%d%H%M%S)"
+  run_root cp -a "${unit_path}" "${bak}"
+  log "Backed up ${unit_path} -> ${bak}"
+}
+
+stop_disable() {
+  local name="$1"
+  if systemctl list-unit-files "${name}.service" >/dev/null 2>&1 \
+    || [[ -f "/etc/systemd/system/${name}.service" ]] \
+    || systemctl status "${name}.service" >/dev/null 2>&1; then
+    log "Stopping/disabling ${name}.service"
+    run_root systemctl stop "${name}.service" 2>/dev/null || true
+    run_root systemctl disable "${name}.service" 2>/dev/null || true
+  else
+    log "Skip ${name}.service (not installed)"
+  fi
+}
+
+remove_custom_unit() {
+  local name="$1"
+  local path="/etc/systemd/system/${name}.service"
+  if [[ -f "${path}" ]] || [[ -L "${path}" ]]; then
+    backup_unit "${path}"
+    log "Removing ${path}"
+    run_root rm -f "${path}"
+  fi
+}
+
+# --- plan summary ---
+log "Host: $(hostname 2>/dev/null || echo unknown)"
+log "Will KEEP: dragoncopy + normal Pi (SSH, desktop, RealVNC, network, …)"
+log "Will STOP/DISABLE/REMOVE units: ${REMOVE_SERVICES[*]}"
+if [[ "${DISABLE_DOCKER}" -eq 1 ]]; then
+  log "Will also disable docker + containerd (EventDragon was the only container)"
+else
+  log "Docker left enabled (use --disable-docker to turn it off too)"
+fi
+if [[ "${PURGE_PACKAGES}" -eq 1 ]]; then
+  log "Will also apt-remove ngrok package"
+fi
+
+confirm "This will stop EventDragon, ngrok, novnc, and x11vnc on this Pi."
+
+# Refuse to touch keep list
+for k in "${KEEP_HINT[@]}"; do
+  for r in "${REMOVE_SERVICES[@]}"; do
+    if [[ "${k}" == "${r}" ]]; then
+      die "Internal error: keep/remove overlap on ${k}"
+    fi
+  done
+done
+
+if systemctl is-active --quiet dragoncopy.service 2>/dev/null; then
+  log "dragoncopy.service is active — leaving it alone."
+else
+  warn "dragoncopy.service is not active right now (not starting/stopping it)."
+fi
+
+# Stop EventDragon stack cleanly: ngrok first, then bot, then compose db
+log "Stopping EventDragon stack (if present)..."
+stop_disable eventdragon-ngrok
+stop_disable eventdragon-bot
+
+if [[ -d /home/pi/eventdragon-bot ]]; then
+  log "Stopping EventDragon docker-compose in /home/pi/eventdragon-bot"
+  compose_down() {
+    if command -v docker-compose >/dev/null 2>&1; then
+      (cd /home/pi/eventdragon-bot && docker-compose down)
+    elif docker compose version >/dev/null 2>&1; then
+      (cd /home/pi/eventdragon-bot && docker compose down)
+    else
+      return 1
+    fi
+  }
+  if [[ "${DRY_RUN}" -eq 1 ]]; then
+    printf '[dry-run] (as pi) docker compose down in /home/pi/eventdragon-bot\n'
+  else
+    need_sudo
+    if [[ "$(id -un)" == "pi" ]]; then
+      compose_down || warn "docker compose down failed (continuing)"
+    else
+      "${SUDO[@]}" -u pi bash -c 'cd /home/pi/eventdragon-bot && (docker-compose down 2>/dev/null || docker compose down)' \
+        || warn "docker compose down failed (continuing)"
+    fi
+  fi
+fi
+
+# Kill stray ngrok if unit already gone
+if pgrep -x ngrok >/dev/null 2>&1; then
+  log "Stopping leftover ngrok process"
+  run_root pkill -TERM ngrok 2>/dev/null || true
+  sleep 1
+  run_root pkill -KILL ngrok 2>/dev/null || true
+fi
+
+stop_disable novnc
+stop_disable x11vnc
+
+for name in "${REMOVE_SERVICES[@]}"; do
+  remove_custom_unit "${name}"
+done
+
+run_root systemctl daemon-reload
+
+if [[ "${DISABLE_DOCKER}" -eq 1 ]]; then
+  log "Disabling Docker engine (containerd + docker)"
+  run_root systemctl stop docker.service docker.socket containerd.service 2>/dev/null || true
+  run_root systemctl disable docker.service docker.socket containerd.service 2>/dev/null || true
+fi
+
+if [[ "${PURGE_PACKAGES}" -eq 1 ]]; then
+  if command -v apt-get >/dev/null 2>&1; then
+    log "Removing ngrok package (binaries under /usr/local/bin/ngrok may remain)"
+    run_root apt-get remove -y ngrok 2>/dev/null || warn "apt remove ngrok failed / not an apt package"
+    if [[ -x /usr/local/bin/ngrok ]]; then
+      warn "Left /usr/local/bin/ngrok in place (manual install). Delete yourself if desired:"
+      warn "  sudo rm -f /usr/local/bin/ngrok"
+    fi
+  fi
+fi
+
+log "Reload + quick status check"
+run_root systemctl daemon-reload
+
+echo
+log "Remaining custom units in /etc/systemd/system:"
+run_root bash -c 'ls -la /etc/systemd/system/*.service 2>/dev/null || true'
+
+echo
+log "dragoncopy status:"
+systemctl --no-pager --full status dragoncopy.service 2>/dev/null || warn "dragoncopy.service not found"
+
+echo
+log "Still enabled that look third-party (heuristic):"
+systemctl list-unit-files --type=service --state=enabled --no-pager 2>/dev/null \
+  | grep -Ei 'ngrok|eventdragon|novnc|x11vnc|docker|mirrorbot' \
+  || echo "(none of those names still enabled)"
+
+cat <<EOF
+
+Done.
+
+Kept running for a normal Pi + DragonCopy:
+  • dragoncopy.service
+  • SSH, desktop (lightdm), RealVNC (vncserver-x11-serviced), networking, etc.
+
+Disabled/removed:
+  • eventdragon-bot, eventdragon-ngrok, novnc, x11vnc
+
+Backups (if anything was removed):
+  /etc/systemd/system/*.pi-cleanup.bak.*
+
+Optional follow-ups (not done unless you passed flags):
+  ./pi-cleanup --yes --disable-docker
+  ./pi-cleanup --yes --purge-packages
+  # Project files still on disk (not deleted):
+  #   /home/pi/eventdragon-bot
+  # Delete that folder yourself only if you are sure you do not need it.
+EOF

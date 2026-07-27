@@ -8,9 +8,12 @@
 #   ./dragoncopy restart
 #   ./dragoncopy update
 #   ./dragoncopy status
+#   ./dragoncopy token
 #   ./dragoncopy uninstall
 #
-# Expects DISCORD_TOKEN_MIRRORBOT in the environment (e.g. /etc/environment).
+# On install (or ./dragoncopy token), you are prompted for DISCORD_TOKEN_MIRRORBOT.
+# The token is stored only inside the systemd unit the script already manages
+# (/etc/systemd/system/dragoncopy.service) — no extra token/env files.
 
 set -euo pipefail
 
@@ -30,6 +33,9 @@ PYTHON_BIN="${VENV_DIR}/bin/python"
 PIP_BIN="${VENV_DIR}/bin/pip"
 BOT_ENTRY="${ROOT}/bot.py"
 REQ_FILE="${ROOT}/requirements.txt"
+
+# Set by ensure_bot_token / prompt flow; written into the systemd unit.
+BOT_TOKEN=""
 
 log()  { printf '==> %s\n' "$*"; }
 warn() { printf '!!  %s\n' "$*" >&2; }
@@ -56,30 +62,135 @@ have_systemctl() {
   command -v systemctl >/dev/null 2>&1
 }
 
-token_present() {
-  # Interactive shell / already exported
+# Extract TOKEN_VAR value from a systemd unit file (Environment= lines).
+read_token_from_unit_file() {
+  local file="$1"
+  [[ -f "${file}" ]] || return 1
+
+  local line value
+  # Prefer an exact Environment=VAR=... (optionally quoted)
+  line="$(run_root grep -E "^Environment=(\"${TOKEN_VAR}=|${TOKEN_VAR}=)" "${file}" 2>/dev/null | tail -n1 || true)"
+  [[ -n "${line}" ]] || return 1
+
+  value="${line#Environment=}"
+  value="${value#\"}"
+  value="${value%\"}"
+  value="${value#${TOKEN_VAR}=}"
+  value="${value#"${TOKEN_VAR}="}"
+  # Trim accidental whitespace
+  value="$(printf '%s' "${value}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  [[ -n "${value}" ]] || return 1
+  printf '%s' "${value}"
+}
+
+find_existing_token() {
+  local found=""
+
+  # 1) Already exported in this shell
   if [[ -n "${!TOKEN_VAR:-}" ]]; then
+    printf '%s' "${!TOKEN_VAR}"
     return 0
   fi
-  # Common system locations on a Pi
-  if [[ -f /etc/environment ]] && grep -Eq "^[[:space:]]*${TOKEN_VAR}=" /etc/environment; then
-    return 0
+
+  # 2) Current managed service unit
+  if [[ -f "${SERVICE_FILE}" ]]; then
+    found="$(read_token_from_unit_file "${SERVICE_FILE}" || true)"
+    if [[ -n "${found}" ]]; then
+      printf '%s' "${found}"
+      return 0
+    fi
   fi
-  if [[ -f "/etc/default/${SERVICE_NAME}" ]] && grep -Eq "^[[:space:]]*${TOKEN_VAR}=" "/etc/default/${SERVICE_NAME}"; then
-    return 0
-  fi
+
+  # 3) Backups of old units (e.g. mirrorbot.service.dragoncopy.bak.*)
+  local bak
+  for bak in /etc/systemd/system/*.dragoncopy.bak.* /etc/systemd/system/mirrorbot.service; do
+    [[ -e "${bak}" ]] || continue
+    found="$(read_token_from_unit_file "${bak}" || true)"
+    if [[ -n "${found}" ]]; then
+      printf '%s' "${found}"
+      return 0
+    fi
+  done
+
   return 1
 }
 
-load_token_hint() {
-  if token_present; then
-    log "Found ${TOKEN_VAR} in the environment or system config."
-  else
-    warn "${TOKEN_VAR} is not set."
-    warn "Add it to /etc/environment, for example:"
-    warn "  ${TOKEN_VAR}=your_token_here"
-    warn "Then log out/in (or reboot) so systemd and shells can see it."
+token_present() {
+  if [[ -n "${BOT_TOKEN}" ]]; then
+    return 0
   fi
+  find_existing_token >/dev/null 2>&1
+}
+
+prompt_for_token() {
+  local entered="" confirm=""
+  if [[ ! -t 0 ]]; then
+    die "No bot token available and this is not an interactive terminal. Re-run ./dragoncopy install (or token) in a terminal."
+  fi
+
+  echo
+  log "Paste your Discord bot token for ${TOKEN_VAR}."
+  log "Input is hidden. Get/reset it in the Discord Developer Portal → Bot."
+  printf 'Token: '
+  # shellcheck disable=SC2162
+  read -r -s entered
+  echo
+  [[ -n "${entered}" ]] || die "Empty token — aborted."
+
+  printf 'Confirm token: '
+  # shellcheck disable=SC2162
+  read -r -s confirm
+  echo
+  [[ "${entered}" == "${confirm}" ]] || die "Tokens did not match — aborted."
+
+  if [[ "${entered}" == *$'\n'* ]] || [[ "${entered}" == *$'\r'* ]]; then
+    die "Token contains invalid newline characters."
+  fi
+
+  BOT_TOKEN="${entered}"
+}
+
+# Resolve BOT_TOKEN: reuse existing unless force_prompt=1, otherwise ask.
+ensure_bot_token() {
+  local force_prompt="${1:-0}"
+  local existing=""
+
+  if [[ "${force_prompt}" == "1" ]]; then
+    prompt_for_token
+    return 0
+  fi
+
+  if [[ -n "${BOT_TOKEN}" ]]; then
+    return 0
+  fi
+
+  existing="$(find_existing_token || true)"
+  if [[ -n "${existing}" ]]; then
+    BOT_TOKEN="${existing}"
+    log "Using existing bot token already configured on this system."
+    if [[ -t 0 ]]; then
+      printf 'Keep this token? [Y/n] '
+      local ans
+      # shellcheck disable=SC2162
+      read -r ans || true
+      case "${ans}" in
+        n|N|no|NO)
+          prompt_for_token
+          ;;
+      esac
+    fi
+    return 0
+  fi
+
+  prompt_for_token
+}
+
+systemd_escape_env_value() {
+  # Escape for Environment="VAR=value" form
+  local v="$1"
+  v="${v//\\/\\\\}"
+  v="${v//\"/\\\"}"
+  printf '%s' "${v}"
 }
 
 unit_exists() {
@@ -93,7 +204,6 @@ unit_exists() {
 soft_stop_processes() {
   log "Soft-stopping any running DragonCopy / mirrorbot processes..."
 
-  # Prefer our managed service first
   if have_systemctl; then
     if unit_exists "${SERVICE_NAME}"; then
       run_root systemctl stop "${SERVICE_NAME}.service" 2>/dev/null || true
@@ -108,7 +218,6 @@ soft_stop_processes() {
     done
   fi
 
-  # Gracefully stop stray python processes for this checkout / known bot names
   local pids
   pids="$(pgrep -f "[Pp]ython.*bot\\.py" 2>/dev/null || true)"
   if [[ -n "${pids}" ]]; then
@@ -150,14 +259,12 @@ cleanup_stray_autostart() {
     local name unit
     for name in "${OLD_SERVICE_NAMES[@]}"; do
       unit="${name}.service"
-      # Skip the unit we ourselves own — it gets rewritten on install
       if [[ "${name}" == "${SERVICE_NAME}" ]]; then
         continue
       fi
       if unit_exists "${name}"; then
         warn "Removing old systemd unit: ${unit}"
         run_root systemctl disable --now "${unit}" 2>/dev/null || true
-        # Keep a dated backup so tokens / paths in old units are not lost
         if [[ -f "/etc/systemd/system/${unit}" ]] || [[ -L "/etc/systemd/system/${unit}" ]]; then
           local backup="/etc/systemd/system/${unit}.dragoncopy.bak.$(date +%Y%m%d%H%M%S)"
           run_root cp -a "/etc/systemd/system/${unit}" "${backup}"
@@ -173,7 +280,6 @@ cleanup_stray_autostart() {
     run_root systemctl daemon-reload 2>/dev/null || true
   fi
 
-  # Drop crontab @reboot lines that start this bot (current user + root if possible)
   cleanup_crontab_for_user() {
     local user="$1"
     local tmp
@@ -199,9 +305,8 @@ cleanup_stray_autostart() {
     cleanup_crontab_for_user root 2>/dev/null || true
   fi
 
-  # rc.local mentions
   if [[ -f /etc/rc.local ]] && grep -Eiq 'bot\.py|mirrorbot|dragoncopy' /etc/rc.local; then
-    warn "Found bot start lines in /etc/rc.local — comment them out so only this manager auto-starts the bot."
+    warn "Found bot start lines in /etc/rc.local — commenting them out."
     run_root cp /etc/rc.local "/etc/rc.local.dragoncopy.bak.$(date +%s)"
     run_root sed -i -E 's|^([^#].*(bot\.py|mirrorbot|dragoncopy).*)|# disabled by dragoncopy manager: \1|I' /etc/rc.local
   fi
@@ -243,12 +348,16 @@ write_service_unit() {
   have_systemctl || die "systemctl not found — this manager needs systemd (Raspberry Pi OS / most Linux)."
   [[ -x "${PYTHON_BIN}" ]] || die "venv python missing; run: ./dragoncopy install"
   [[ -f "${BOT_ENTRY}" ]] || die "Missing ${BOT_ENTRY}"
+  [[ -n "${BOT_TOKEN}" ]] || die "Internal error: bot token not set before writing service."
 
-  local run_user run_group
+  local run_user run_group escaped
   run_user="$(stat -c '%U' "${ROOT}" 2>/dev/null || id -un)"
   run_group="$(stat -c '%G' "${ROOT}" 2>/dev/null || id -gn)"
+  escaped="$(systemd_escape_env_value "${BOT_TOKEN}")"
 
   log "Writing systemd unit ${SERVICE_FILE} (user=${run_user})"
+  # Token lives only in this unit (same idea as the old mirrorbot.service).
+  # Mode 600: root-only read; no separate token file is created.
   run_root tee "${SERVICE_FILE}" >/dev/null <<EOF
 [Unit]
 Description=DragonCopy Discord Mirror Bot
@@ -260,9 +369,7 @@ Type=simple
 User=${run_user}
 Group=${run_group}
 WorkingDirectory=${ROOT}
-# System-wide env (Pi often keeps DISCORD_TOKEN_MIRRORBOT here)
-EnvironmentFile=-/etc/environment
-EnvironmentFile=-/etc/default/${SERVICE_NAME}
+Environment="${TOKEN_VAR}=${escaped}"
 ExecStart=${PYTHON_BIN} ${BOT_ENTRY}
 Restart=on-failure
 RestartSec=5
@@ -272,6 +379,7 @@ TimeoutStopSec=30
 [Install]
 WantedBy=multi-user.target
 EOF
+  run_root chmod 600 "${SERVICE_FILE}"
 
   run_root systemctl daemon-reload
   run_root systemctl enable "${SERVICE_NAME}.service"
@@ -284,25 +392,23 @@ cmd_install() {
   ensure_python
   ensure_venv
   install_deps
-  load_token_hint
+  ensure_bot_token 0
   write_service_unit
-  if token_present; then
-    log "Starting bot..."
-    run_root systemctl restart "${SERVICE_NAME}.service"
-    sleep 1
-    cmd_status
-  else
-    warn "Service installed and enabled, but not started (token missing)."
-    warn "Set ${TOKEN_VAR}, then run: ./dragoncopy start"
-  fi
-  log "Done. Manage with: ./dragoncopy start|stop|restart|update|status"
+  log "Starting bot..."
+  run_root systemctl restart "${SERVICE_NAME}.service"
+  sleep 1
+  cmd_status
+  log "Done. Manage with: ./dragoncopy start|stop|restart|update|status|token"
 }
 
 cmd_start() {
   have_systemctl || die "systemctl required"
   [[ -f "${SERVICE_FILE}" ]] || die "Not installed yet. Run: ./dragoncopy install"
-  load_token_hint
-  token_present || die "${TOKEN_VAR} is not set; cannot start."
+  ensure_bot_token 0
+  # Refresh unit if we had to prompt for a missing token
+  if ! read_token_from_unit_file "${SERVICE_FILE}" >/dev/null 2>&1; then
+    write_service_unit
+  fi
   soft_stop_processes
   run_root systemctl start "${SERVICE_NAME}.service"
   sleep 1
@@ -330,7 +436,6 @@ cmd_update() {
 
   if [[ -d "${ROOT}/.git" ]]; then
     log "Pulling latest code..."
-    # Prefer main; fall back to whatever is checked out
     if git -C "${ROOT}" rev-parse --verify origin/main >/dev/null 2>&1; then
       git -C "${ROOT}" fetch origin main
       git -C "${ROOT}" pull --ff-only origin main || git -C "${ROOT}" pull --ff-only
@@ -342,24 +447,29 @@ cmd_update() {
   fi
 
   install_deps
+  ensure_bot_token 0
 
   if [[ ! -f "${SERVICE_FILE}" ]]; then
-    warn "Service unit missing — running full install path for systemd."
+    warn "Service unit missing — recreating."
     cleanup_stray_autostart
-    write_service_unit
-  else
-    # Refresh unit in case paths/user changed
-    write_service_unit
   fi
+  write_service_unit
 
-  if token_present; then
-    log "Starting bot after update..."
-    run_root systemctl restart "${SERVICE_NAME}.service"
-    sleep 1
-    cmd_status
-  else
-    warn "Updated, but token missing — not starting. Fix ${TOKEN_VAR}, then: ./dragoncopy start"
-  fi
+  log "Starting bot after update..."
+  run_root systemctl restart "${SERVICE_NAME}.service"
+  sleep 1
+  cmd_status
+}
+
+cmd_token() {
+  have_systemctl || die "systemctl required"
+  ensure_venv
+  ensure_bot_token 1
+  write_service_unit
+  log "Token saved in ${SERVICE_FILE}. Restarting bot..."
+  run_root systemctl restart "${SERVICE_NAME}.service"
+  sleep 1
+  cmd_status
 }
 
 cmd_status() {
@@ -375,9 +485,9 @@ cmd_status() {
     printf '%s\n' "${pids}"
   fi
   if token_present; then
-    log "${TOKEN_VAR}: present"
+    log "${TOKEN_VAR}: configured"
   else
-    warn "${TOKEN_VAR}: missing"
+    warn "${TOKEN_VAR}: missing — run ./dragoncopy token"
   fi
 }
 
@@ -387,6 +497,9 @@ cmd_uninstall() {
   if have_systemctl; then
     run_root systemctl disable --now "${SERVICE_NAME}.service" 2>/dev/null || true
     if [[ -f "${SERVICE_FILE}" ]]; then
+      local backup="/etc/systemd/system/${SERVICE_NAME}.service.dragoncopy.bak.$(date +%Y%m%d%H%M%S)"
+      run_root cp -a "${SERVICE_FILE}" "${backup}"
+      log "Backed up unit (with token) to ${backup}"
       run_root rm -f "${SERVICE_FILE}"
     fi
     run_root systemctl daemon-reload
@@ -403,15 +516,17 @@ Usage: $(basename "$0") <command>
 
 Commands:
   install     Soft-stop old bot, remove stray auto-starts, create venv,
-              install dependencies, install systemd auto-start, start bot
+              install dependencies, ask for bot token, enable auto-start, start
   start       Start the bot (systemd)
   stop        Soft-stop the bot
   restart     Stop then start
-  update      git pull + deps + restart
+  update      git pull + deps + restart (keeps saved token)
+  token       Prompt for a new bot token and restart
   status      Show service / process / token status
-  uninstall   Remove systemd service and stray auto-starts (keeps files)
+  uninstall   Remove systemd service (backs up unit first; keeps files)
 
-Token: set ${TOKEN_VAR} in the system environment (e.g. /etc/environment).
+Token: prompted on install / token. Stored only in ${SERVICE_FILE}
+(no extra env/token files). Mode 600 (root-only).
 EOF
 }
 
@@ -423,6 +538,7 @@ main() {
     stop)      cmd_stop ;;
     restart)   cmd_restart ;;
     update)    cmd_update ;;
+    token)     cmd_token ;;
     status)    cmd_status ;;
     uninstall) cmd_uninstall ;;
     -h|--help|help|"") usage ;;

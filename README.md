@@ -12,29 +12,22 @@ One script handles install, start, stop, update, and boot auto-start. It soft-st
 git clone https://github.com/Tiberius1OOO/mirrorbot.git
 cd mirrorbot
 chmod +x dragoncopy
+./dragoncopy install    # asks for the bot token, then sets everything up
 ```
 
-Put your token in the system environment (once):
+`install` prompts for your Discord bot token (hidden input, confirm twice) and stores it **only** inside `/etc/systemd/system/dragoncopy.service` (mode `600`) — the same place your old `mirrorbot.service` kept it. No `/etc/environment` edits and no extra token files.
 
 ```bash
-echo 'DISCORD_TOKEN_MIRRORBOT=your_token_here' | sudo tee -a /etc/environment
-```
-
-Then:
-
-```bash
-./dragoncopy install    # venv + deps + clean auto-start + start
 ./dragoncopy stop
 ./dragoncopy start
-./dragoncopy update     # git pull + deps + restart
+./dragoncopy update     # git pull + deps + restart (keeps token)
+./dragoncopy token      # change token later
 ./dragoncopy status
 ./dragoncopy restart
-./dragoncopy uninstall  # remove service only; keeps files
+./dragoncopy uninstall  # remove service; backs up the unit first
 ```
 
 `update` pulls `main`, refreshes dependencies, and starts the bot again.
-
-The token is read from `DISCORD_TOKEN_MIRRORBOT` (same variable `bot.py` uses). The service also loads `/etc/environment` and optional `/etc/default/dragoncopy`.
 
 ---
 

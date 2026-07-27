@@ -157,7 +157,11 @@ cleanup_stray_autostart() {
       if unit_exists "${name}"; then
         warn "Removing old systemd unit: ${unit}"
         run_root systemctl disable --now "${unit}" 2>/dev/null || true
+        # Keep a dated backup so tokens / paths in old units are not lost
         if [[ -f "/etc/systemd/system/${unit}" ]] || [[ -L "/etc/systemd/system/${unit}" ]]; then
+          local backup="/etc/systemd/system/${unit}.dragoncopy.bak.$(date +%Y%m%d%H%M%S)"
+          run_root cp -a "/etc/systemd/system/${unit}" "${backup}"
+          log "Backed up old unit to ${backup}"
           run_root rm -f "/etc/systemd/system/${unit}"
         fi
         if [[ -f "/lib/systemd/system/${unit}" ]]; then
